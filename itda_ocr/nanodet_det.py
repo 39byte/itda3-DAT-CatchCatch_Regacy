@@ -1,39 +1,14 @@
-"""NanoDet-Plus-m 날짜 전용 검출기 (ONNX) — Track B.
-
-`Engine.detect()` 와 **같은 계약**을 지킨다: 입력 `img` (BGR np.ndarray, draft 축소된
-파이프라인 프레임), 반환은 그 프레임 좌표계의 박스 ``(N, 4, 2) float32``.
-점수 내림차순으로 정렬해서 돌려준다. 범용 검출기와 달리 이 점수는 "날짜다움"
-그 자체라 **이 순서가 곧 최종 순위여야 한다** — ``filter_boxes`` 의 기본 종횡비
-재정렬을 덮어씌우면 소비기한 박스 recall@1 이 84.7% → 50.2% 로 무너진다.
-그래서 ``Engine.detect_and_filter()`` 가 NanoDet 경로에서는 재정렬을 끈다.
-
-디코딩은 nanodet `NanoDetPlusHead.get_bboxes` 를 numpy 로 옮긴 것:
-Integral(분포→거리) → distance2bbox → sigmoid → NMS. ONNX 는 head raw 출력
-``(1, 4789, 33)`` 까지만 담고 있어 후처리는 여기서 한다.
-"""
+"""NanoDet-Plus-m 날짜 전용 검출기 (ONNX) 추론 모듈."""
 
 from __future__ import annotations
 
 import numpy as np
 
-_MEAN = np.array([103.53, 116.28, 123.675], dtype=np.float32)   # BGR (cv2.imread 순서)
+_MEAN = np.array([103.53, 116.28, 123.675], dtype=np.float32)   # BGR
 _STD = np.array([57.375, 57.12, 58.395], dtype=np.float32)
 _STRIDES = (8, 16, 32, 64)
 _REG_MAX = 7
 
-#: 반환 박스를 각 변으로 넓히는 비율. **0 이면 안 된다.**
-#:
-#: RapidOCR DB 검출기는 ``unclip_ratio=1.6`` 으로 이미 부풀린 박스를 주는데
-#: NanoDet 회귀 박스는 글자에 딱 맞게 나온다. ``Engine.crop()`` 은 박스를 그대로
-#: 자르므로, 검출기만 바꾸면 크롭 경계에서 첫·마지막 글자가 잘려나간다
-#: (``'2021.08.04'`` → ``'2021.08.0'``). 실제로 병합 직후 665장 중 88장이
-#: 이렇게 퇴행했고 그중 37장이 "연·월은 맞고 일자만 틀림"이었다.
-#:
-#: 값은 ExpDate 665장 스윕으로 정했다 (0.00~0.30, 10점):
-#: 0.00 39.71 · 0.02 40.50 · 0.04 39.94 · 0.06 40.83 · 0.08 41.15 ·
-#: **0.10 41.41** · 0.12 41.33 · 0.15 41.13 · 0.20 40.92 · 0.30 41.07.
-#: 반환 박스를 가로·세로로 넓히는 비율.
-#: 665장 전수 실측 검증: 0.10이 가장 안전하며, 0.15로 늘릴 시 인접 텍스트 침범으로 퇴행 발생.
 DEFAULT_EXPAND = 0.10
 DEFAULT_NMS_IOU = 0.60
 
@@ -118,9 +93,7 @@ class NanoDetDetector:
         x = np.ascontiguousarray(x.transpose(2, 0, 1)[None])     # (1, 3, S, S)
 
         out = self._sess.run(None, {self._inp: x})[0][0]          # (4789, 33)
-        # ⚠️ nanodet _forward_onnx 는 cls 채널에 이미 sigmoid 를 적용해 내보낸다.
-        #    여기서 다시 sigmoid 를 씌우면 [0,1] -> [0.5,0.73] 로 뭉개진다.
-        scores = out[:, 0]                                        # 이미 확률 (단일 클래스)
+        scores = out[:, 0]
         m = scores >= self.score_thr
         if not m.any():
             return np.empty((0, 4, 2), dtype=np.float32)

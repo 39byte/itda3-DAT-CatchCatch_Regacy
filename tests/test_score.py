@@ -32,7 +32,7 @@ def test_known_score_table(pred, expected, why):
 
 
 def test_final_date_dominates():
-    """final_date 하나가 35점 — 나머지 셋을 합친 것보다 크다."""
+    """내부 평가 산출 로직 검증: final_date 가중치 테스트."""
     ymd_only = _pred(final_date="NONE")
     final_only = {**NONE_ROW, "final_date": GT["final_date"]}
     assert score_row(ymd_only, GT) == 15

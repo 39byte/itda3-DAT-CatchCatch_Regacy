@@ -12,9 +12,12 @@ pyclipper==1.4.0
 shapely==2.1.2
 
 # rapidocr-onnxruntime 은 opencv-python 을 하드 의존으로 요구하므로, 무엇을 적든
-# 두 배포판이 함께 설치된다. 둘 다 명시해 버전을 고정하는 편이 결정적이다.
+# 두 배포판이 함께 설치된다. 그런데 둘은 같은 site-packages/cv2/ 에 풀리므로
+# **나중에 설치된 쪽이 이긴다** — 서로 다른 버전을 고정하면 실제로 import 되는 cv2 가
+# pip 의 해석 순서에 따라 달라져, 검증하지 않은 버전이 채점에 쓰일 수 있다.
+# 그래서 두 배포판을 동일 버전으로 못박는다. 어느 쪽이 이기든 검증한 cv2 4.9.0 이다.
 # (headless 는 GUI 라이브러리가 없는 컨테이너에서 libGL 임포트 실패를 막는다.)
-opencv-python==4.11.0.86
+opencv-python==4.9.0.80
 opencv-python-headless==4.9.0.80
 
 numpy==1.26.4

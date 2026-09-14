@@ -1,17 +1,4 @@
-"""인식된 텍스트 → 날짜 후보.
-
-두 가지 설계 결정이 이 모듈의 정확도를 지배한다.
-
-1. **혼동 문자 정규화는 길이를 보존한다.** ``O→0`` 같은 치환을 1:1로만 하면
-   정규화본에서 찾은 매치 위치를 **원문에 그대로 되짚을 수 있다.** 품목보고번호
-   판정(§select)이 원문에서 이뤄져야 하기 때문에 이 성질이 필요하다 —
-   ``2021.08.02S`` 를 정규화하면 끝의 ``S`` 가 ``5`` 가 되어 "더 긴 숫자열"로
-   오판되고, 멀쩡한 날짜가 버려진다.
-
-2. **부분 결과를 버리지 않는다.** 채점 산식이 ``year 5 + month 5 + day 5 +
-   final 35`` 이므로 ``OCT. 2021`` 처럼 일자가 없어도 연·월만으로 10점이다.
-   완전 매치만 인정하면 그 10점이 0점이 된다.
-"""
+"""인식된 텍스트에서 날짜 후보를 추출하는 모듈."""
 
 from __future__ import annotations
 
@@ -19,7 +6,6 @@ import calendar
 import re
 from dataclasses import dataclass
 
-#: 길이 보존 1:1 치환만 담는다. 이 불변식이 깨지면 원문 인덱스가 어긋난다.
 CONFUSION = str.maketrans({
     "O": "0", "o": "0", "D": "0", "Q": "0",
     "l": "1", "I": "1", "i": "1", "|": "1",
@@ -35,17 +21,11 @@ MONTHS = {m: i for i, m in enumerate(
 MONTHS["SEPT"] = 9
 _MON = "|".join(sorted(MONTHS, key=len, reverse=True))
 
-#: 유효 연도 창. 배포셋의 연도 분포로 좁히면 과적합이다 — 평가셋은 2026~2028 쏠림.
 YEAR_MIN, YEAR_MAX = 2018, 2032
 
 
 def normalize(text: str) -> str:
-    """OCR 혼동 문자를 되돌린다. **길이를 바꾸지 않는다.**
-
-    ⚠️ 무조건 치환하면 안 된다 — ``O→0`` 을 그냥 적용하면 ``OCT`` 가 ``0CT`` 가
-    되어 **월 이름 패턴이 영원히 매치되지 않는다.** 글자 사이에 낀 글자는 글자로
-    두고, 숫자 이웃을 가진 글자만 숫자로 되돌린다.
-    """
+    """OCR 혼동 문자를 1:1로 정규화한다."""
     chars = list(text)
     last = len(text) - 1
     for i, ch in enumerate(text):
@@ -55,7 +35,7 @@ def normalize(text: str) -> str:
         prev_alpha = i > 0 and text[i - 1].isalpha()
         next_alpha = i < last and text[i + 1].isalpha()
         if prev_alpha or next_alpha:
-            continue          # OCT / DEC / SEP 의 글자를 지키는 분기
+            continue
         chars[i] = mapped
     return "".join(chars)
 
@@ -67,12 +47,12 @@ class Candidate:
     year: str | None
     month: str | None
     day: str | None
-    text: str          # 매치된 원문 조각 (정규화 이전)
-    context: str       # 후보가 나온 줄 전체 (키워드 탐색용)
+    text: str          # 매치된 원문 조각
+    context: str       # 문맥 줄 전체
     pattern: str
-    embedded: bool     # 더 긴 숫자열의 일부인가 → 품목보고번호 계열
+    embedded: bool     # 연속 숫자열 포함 여부
     span: tuple[int, int]
-    source: int = 0    # 후보를 만든 박스 인덱스
+    source: int = 0
 
     @property
     def final_date(self) -> str | None:
@@ -86,11 +66,7 @@ class Candidate:
 
 
 def fuzzy_month(name: str) -> int | None:
-    """월 이름을 1글자 오독까지 허용해 해석한다 (``MRY`` → ``MAY``).
-
-    인식기가 세 글자 중 하나를 놓치는 일이 잦다. 4자리 연도가 함께 앵커된
-    자리에서만 쓰므로 오탐 위험은 낮다.
-    """
+    """영문 월 명칭의 1글자 오독을 보정한다."""
     key = name.upper()[:3]
     if key in MONTHS:
         return MONTHS[key]
@@ -104,7 +80,7 @@ def fuzzy_month(name: str) -> int | None:
 
 
 def _year4(value: str) -> str | None:
-    """2자리/4자리 연도를 4자리로. 창 밖이면 None."""
+    """2자리/4자리 연도를 4자리로 변환한다."""
     y = int(value)
     if len(value) == 2:
         y += 2000
@@ -120,11 +96,10 @@ def _valid_md(month: int, day: int | None) -> bool:
 
 
 def _build(year, month, day, *, raw, span, context, pattern, source):
-    """검증 후 Candidate 생성. 달력상 불가능하면 None."""
+    """검증 후 Candidate 객체를 생성한다."""
     if month is not None and not _valid_md(month, day):
         return None
     if year is not None and day is not None and month is not None:
-        # 윤년·소월 검증은 연도가 있어야 가능하다.
         if day > calendar.monthrange(int(year), month)[1]:
             return None
     return Candidate(
@@ -141,17 +116,7 @@ def _build(year, month, day, *, raw, span, context, pattern, source):
 
 
 def _embedded(raw: str, start: int, end: int) -> bool:
-    """매치가 **더 긴 숫자열의 일부**인가 — 품목보고번호 킬러의 판정 근거.
-
-    ``20130628332176`` 에서 ``20130628`` 을 잡으면 뒤가 ``3`` 이므로 True.
-    **반드시 원문(정규화 이전)에서 판정한다.**
-
-    ⚠️ **구분자가 있는 매치에는 적용하지 않는다.** ExpDate 실측에서
-    ``2021.06.090A`` (날짜 뒤에 로트코드가 구분자 없이 붙은 형태)를 정확히 읽고도
-    뒤의 ``0`` 때문에 기각해 버렸다. 점이 찍힌 ``2021.06.09`` 는 이미 형식이 갖춰진
-    날짜이고, 뒤에 붙은 숫자는 시각·로트코드이지 14자리 번호의 증거가 아니다.
-    품목보고번호는 **구분자 없는 연속 숫자**라는 점이 이 둘을 가른다.
-    """
+    """매치가 구분자 없는 연속 숫자열의 일부인지 판별한다."""
     if any(sep in raw[start:end] for sep in ".-/ "):
         return False
     before = raw[start - 1] if start > 0 else ""
@@ -159,67 +124,44 @@ def _embedded(raw: str, start: int, end: int) -> bool:
     return before.isdigit() or after.isdigit()
 
 
-# ── 패턴 정의 ──────────────────────────────────────────────────────────────
-# 구분자는 역참조(\2)로 **일관성을 강제**한다. 그러지 않으면 영양성분표의
-# 무작위 숫자쌍이 전부 날짜로 잡힌다.
+# ── 날짜 정규식 패턴 정의 ───────────────────────────────────────────
 _SEP = r"[.\-/]"
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("korean", re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")),
-    # 구분자가 있는 패턴: 날짜 뒤에 로트코드/시각 등이 붙어 있어도 매치 허용 (단, 연도는 4자리)
     ("ymd4",   re.compile(rf"(20\d{{2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(\d{{1,2}})")),
     ("dmy4",   re.compile(rf"(\d{{1,2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(20\d{{2}})")),
-    # 순수 공백 구분자 (2021 08 02)
     ("ymd4_space", re.compile(r"(20\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("dmy4_space", re.compile(r"(\d{1,2})\s+(\d{1,2})\s+(20\d{2})")),
-    # 이종 구분자 (2022.03-01)
     ("ymd4_cross", re.compile(rf"(20\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
     ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(20\d{{2}})")),
-    # 콜론 구분자 (2021:04.13, 2020:09.20, 2026:06:16)
     ("ymd4_colon", re.compile(r"(?<!\d)(20\d{2})\s*[:]\s*(\d{1,2})\s*[.:\-/]\s*(\d{1,2})(?!\d)")),
     ("ymd4_colon2", re.compile(r"(?<!\d)(20\d{2})\s*[.:\-/]\s*(\d{1,2})\s*[:]\s*(\d{1,2})(?!\d)")),
-    # 8자리 날짜 + 1자리 라인코드 (9자리: 202102210, 202608182)
     ("ymd9",   re.compile(r"(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d(?!\d)")),
-    # 구분자 없는 연속 숫자: embedded 판정을 위해 뒷부분 가드 해제 (select에서 digit_len으로 차등 감점)
     ("ymd8",   re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})")),
-    # `BB:2023.1015` — 연도 뒤에 월·일이 붙어 있는 형태.
     ("y_mmdd", re.compile(r"(20\d{2})[.\-/ ](\d{2})(\d{2})(?!\d)")),
-    # `25 082023` — 일자 뒤에 월·연이 붙어 있는 형태.
     ("d_mmy",  re.compile(r"(?<!\d)(\d{1,2})[.\-/ ](\d{2})(20\d{2})(?!\d)")),
-    # `12102022` — 구분자 없는 8자리 DDMMYYYY.
     ("dmy8",   re.compile(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)")),
     ("ymd2",   re.compile(rf"(\d{{2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(\d{{1,2}})")),
     ("ymd2_space", re.compile(r"(\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("ymd2_cross", re.compile(rf"(\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
-    # 영문 월 패턴: Y_MON_D (2021 JUN 12), D_MON_Y (12 JUN 2021), MON_D_Y (JUN 12 2021)
     ("y_mon_d", re.compile(rf"(20\d{{2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{1,2}})", re.I)),
     ("d_mon_y", re.compile(rf"(\d{{1,2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{2,4}})", re.I)),
     ("mon_d_y", re.compile(rf"({_MON})\w*\.?\s*(\d{{1,2}})\s*[,. ]\s*(\d{{2,4}})", re.I)),
-    # ── 여기서부터 불완전 날짜: 버리지 않는다 (부분 점수 10점) ──
     ("mon_y",  re.compile(rf"({_MON})\w*\.?\s*(20\d{{2}})", re.I)),
-    # ── 인식 오류를 흡수하는 완화 패턴 (엄격한 것들이 먼저 시도된 뒤) ──
-    # `22/MRY/2023` — MAY를 MRY로 읽는 식의 1글자 오독. 4자리 연도가 앵커라 안전하다.
     ("d_fuzz_y", re.compile(r"(\d{1,2})\s*[./\- ]\s*([A-Za-z]{3,4})\s*[./\- ]\s*(\d{2,4})")),
     ("fuzz_y",  re.compile(r"(?<![A-Za-z])([A-Za-z]{3,4})\.?\s*(20\d{2})")),
-    # `202112.16A6` — 연·월이 붙고 일자만 구분자로 떨어진 형태.
     ("ymmd",   re.compile(r"(20\d{2})(\d{2})[./\- ](\d{1,2})(?![\d])")),
-    # 2자리 연도 + 월 + 일 (2112.22, 2104.04 등 점 구분만 허용)
     ("ymmd2",  re.compile(r"(?<!\d)(\d{2})(\d{2})\.(\d{1,2})(?![\d])")),
-    # 2자리 연도 + 점 + MMDD (21.0902F)
     ("y2_mmdd", re.compile(r"(?<!\d)(\d{2})\.(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")),
-    # 구분자 없는 6자리 YYMMDD (앞뒤 숫자 가드)
     ("ymd6",   re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})(?!\d)")),
     ("ym4",    re.compile(rf"(20\d{{2}})\s*({_SEP})\s*(\d{{1,2}})(?!{_SEP}?\d)")),
-    # `02/2022` — 월/연 (일자 없음). 4자리 연도가 뒤에 오는 형태.
     ("m_y",    re.compile(r"(?<!\d)(\d{1,2})\s*[./\-]\s*(20\d{2})(?!\d)")),
-    # 2줄 인쇄 날짜 패턴: 윗줄(연·월)과 아랫줄(일·시각)이 공백으로 결합된 형태 (2025.10 14:25)
     ("ym_space_d", re.compile(r"(?<!\d)(20\d{2})[.:\-/]\s*([01]?\d)\s+([0-3]?\d)(?![:\d])")),
     ("d_space_my", re.compile(r"(?<![:\d])([0-3]?\d)\s+([01]?\d)[.:\-/](20\d{2})(?!\d)")),
-    # 도트 잉크젯 슬래시(/) -> 1 오독 구제 패턴 (202710807 -> 2027/08/07)
     ("y1m1d",  re.compile(r"(?<!\d)(20\d{2})1([01]\d)1([0-3]\d)(?!\d)")),
     ("d1m1y",  re.compile(r"(?<!\d)([0-3]\d)1([01]\d)1(20\d{2})(?!\d)")),
     ("y1m1d2", re.compile(r"(?<!\d)(\d{2})1([01]\d)1([0-3]\d)(?!\d)")),
-    # 연도 없음. 앞에 '숫자+구분자'가 오면 더 긴 날짜의 꼬리이므로 잡지 않는다
     ("md",     re.compile(rf"(?<!\d)(?<![\d][.\-/])(\d{{1,2}})\s*({_SEP})\s*(\d{{1,2}})(?!{_SEP}?\d)")),
 ]
 
@@ -312,18 +254,13 @@ def _interpret(name, m, raw, source):
     if name == "ym4":
         return dated(_year4(g[0]), int(g[2]), None)
     if name == "md":
-        # 연도 없음 (02.18까지). MM.DD 를 DD.MM 보다 선호한다(같은 이유).
         return [_build(None, int(g[0]), int(g[2]), **kw),
                 _build(None, int(g[2]), int(g[0]), **{**kw, "pattern": "dm"})]
     return []
 
 
 def parse(raw: str, source: int = 0) -> list[Candidate]:
-    """한 줄에서 날짜 후보를 전부 뽑는다.
-
-    정규식은 **정규화본**에 돌리고(``O→0`` 보정을 받기 위해),
-    ``embedded`` 판정과 ``text`` 는 **원문**에서 가져온다(위 설계 결정 1).
-    """
+    """한 줄의 텍스트에서 정규식 패턴을 적용해 날짜 후보를 추출한다."""
     if not raw:
         return []
     norm = normalize(raw)
@@ -332,7 +269,6 @@ def parse(raw: str, source: int = 0) -> list[Candidate]:
     for name, pattern in _PATTERNS:
         for m in pattern.finditer(norm):
             start, end = m.span()
-            # 더 구체적인 패턴이 이미 차지한 구간은 건너뛴다 (ymd4 > ym4 > md).
             if any(s <= start and end <= e for s, e in claimed):
                 continue
             found = [c for c in _interpret(name, m, raw, source) if c is not None]
@@ -343,13 +279,7 @@ def parse(raw: str, source: int = 0) -> list[Candidate]:
 
 
 def _filter_overlapping_boxes(row, overlap_thr: float = 0.3):
-    """같은 가로 밴드 내에서 x축이 크게 겹치는 중복 박스를 정리한다.
-
-    동일한 날짜 스탬프가 여러 박스로 검출되었을 때, 이를 가로로 이어붙이면
-    '2021.12.2021.12.04' 같은 괴물 문자열이 생성되어 가짜 날짜(2021.12.20)를
-    양산한다. x축이 overlap_thr 이상 겹치는 박스 중에서는 더 긴 텍스트(또는
-    더 넓은 박스)를 남기고 중복을 제거한다.
-    """
+    """수평으로 겹치는 중복 박스를 정리한다."""
     if len(row) <= 1:
         return row
 
@@ -383,16 +313,7 @@ _TWO_DIGIT_PATS = {"ymd2", "ymd2_space", "ymd2_cross", "dmy2", "ymd6", "ymmd2", 
 
 
 def merge_lines(items, y_tol: float = 0.6) -> list[tuple[str, int]]:
-    """검출 박스들을 시각적 줄(행)로 묶고, 같은 행 안의 조각들을 이어붙인다.
-
-    배경: OCR 검출기는 긴 날짜 문자열('2023. 05. 27')을 공백 기준으로 두세 개
-    박스로 쪼개는 경향이 있다. 개별 박스만 읽으면 연도 따로 일자 따로라 정규식이
-    실패한다. 이 함수가 **박스 기하(y좌표)** 를 보고 같은 밴드에 있는 것들을
-    x순으로 정렬해 붙여준다.
-
-    반환: ``[(merged_text, head_box_index), ...]`` — `head_box_index` 는
-    기하 우선순위 계승을 위해 첫 번째 조각의 인덱스를 달아둔다.
-    """
+    """박스 기하 정보를 기반으로 같은 행의 텍스트 조각들을 병합한다."""
     if not items:
         return []
     boxes = [(t, float(x0), float(y0), float(x1), float(y1))
@@ -427,11 +348,10 @@ def merge_lines(items, y_tol: float = 0.6) -> list[tuple[str, int]]:
             lines.append((" ".join(texts), head))
             lines.append(("".join(texts), head))
 
-    # 수직 2줄 결합: 불완전 날짜(연·월)와 일자가 위아래로 분리된 경우에만 결합
+    # 수직 2줄 결합
     if len(rows) > 1:
         for r_top in rows:
             top_text = " ".join(b[0] for _, b in r_top)
-            # 윗줄이 이미 완전한 날짜를 포함하거나 단순 시각(HH:MM)이면 결합 불필요
             if any(c.complete for c in parse(top_text)) or _is_just_time(top_text):
                 continue
             top_cy = sum((b[2] + b[4]) / 2 for _, b in r_top) / len(r_top)
@@ -441,7 +361,6 @@ def merge_lines(items, y_tol: float = 0.6) -> list[tuple[str, int]]:
                 if r_top is r_bot:
                     continue
                 bot_text = " ".join(b[0] for _, b in r_bot)
-                # 아랫줄이 이미 완전한 날짜를 포함하거나 단순 시각(HH:MM)이면 결합 불필요
                 if any(c.complete for c in parse(bot_text)) or _is_just_time(bot_text):
                     continue
                 bot_cy = sum((b[2] + b[4]) / 2 for _, b in r_bot) / len(r_bot)
@@ -455,20 +374,14 @@ def merge_lines(items, y_tol: float = 0.6) -> list[tuple[str, int]]:
 
 
 def parse_boxes(items) -> list[Candidate]:
-    """검출 박스 목록에서 후보 전부를 뽑는다 — 개별 박스 **와** 병합 줄 양쪽에서.
-
-    ``items``: ``[(text, x0, y0, x1, y1), ...]``
-    """
+    """검출 박스 목록 및 병합 줄에서 모든 날짜 후보를 추출한다."""
     out = []
     for i, box in enumerate(items):
         out.extend(parse(box[0], source=i))
     for line, head in merge_lines(items):
         out.extend(parse(line, source=head))
 
-    # 180° 뒤집힌 크롭 구제. 방향 분류기(cls)가 놓치면 인식 결과가 통째로
-    # 뒤집혀 나온다 — 실측에서 `92/60/7202`(= 2027/06/29), `82-60-204X3`(= 2028-06-02).
-    # 정방향에서 아무것도 못 건졌을 때만 시도하고, 패턴 이름에 `_rev` 를 붙여
-    # select 가 낮은 사전확률을 주도록 한다. 추론 비용은 0이다.
+    # 180도 반전 문자열 fallback 파싱
     if not out:
         for i, box in enumerate(items):
             for cand in parse(box[0][::-1], source=i):
@@ -476,9 +389,7 @@ def parse_boxes(items) -> list[Candidate]:
                                         "pattern": cand.pattern + "_rev",
                                         "context": box[0]}))
 
-    # 같은 (연,월,일)이 여러 경로로 나오면 하나만 남긴다.
-    # 4자리 연도 패턴(ymd4 등)이 2자리 연도 패턴(ymd2 등)에 의해 문맥 길이 이유로
-    # 덮어써지지 않도록 방어하고, 동일 등급에서는 원문이 긴 쪽을 남겨 키워드 문맥을 보존한다.
+    # 동일 (연,월,일) 중복 정리
     best: dict[tuple, Candidate] = {}
     for c in out:
         key = (c.year, c.month, c.day)

@@ -57,6 +57,7 @@ tools/generate_custom_labels.py
 도메인.png
 docs/
 CLAUDE.md
+RESEARCH_AND_DEVELOPMENT_LOG.md
 
 # ===== 7. Python, 환경, 캐시, IDE =====
 __pycache__/
