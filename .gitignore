@@ -55,14 +55,7 @@ tools/generate_custom_labels.py
 [DAT_캐치캐치]_*
 개요.png
 도메인.png
-# docs/ 는 기본 제외하되, README 가 "설계 근거 전문"으로 링크하는 5개는 포함한다.
-# (부모 디렉터리를 통째로 제외하면 하위 negation 이 먹지 않으므로 docs/* 로 쓴다)
-docs/*
-!docs/PIPELINE.md
-!docs/REPRODUCE.md
-!docs/DETECTOR_PLAN.md
-!docs/ERROR_ANALYSIS.md
-!docs/선행연구.md
+docs/
 CLAUDE.md
 RESEARCH_AND_DEVELOPMENT_LOG.md
 

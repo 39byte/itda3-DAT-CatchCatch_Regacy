@@ -91,11 +91,7 @@ python -c "import cv2; print(cv2.getBuildInformation())" | grep 'GUI:'   # GUI: 
 여백 비율은 스윕으로 정했고 0.06~0.15 가 평탄해 중앙값을 골랐다
 (`itda_ocr/nanodet_det.py: DEFAULT_EXPAND`).
 
-근거 전문은 `docs/ERROR_ANALYSIS.md` §10(여백)·§12(순위).
-
 `predict.ipynb` 는 이 파일의 존재를 확인해 자동으로 NanoDet 경로를 켠다.
-재현 절차는 [`docs/REPRODUCE.md`](docs/REPRODUCE.md), 설계 배경은
-[`docs/DETECTOR_PLAN.md`](docs/DETECTOR_PLAN.md).
 
 **[2]와 [5]가 이 설계의 요지입니다.**
 
@@ -109,8 +105,7 @@ python -c "import cv2; print(cv2.getBuildInformation())" | grep 'GUI:'   # GUI: 
   단일 규칙은 "날짜 숫자가 더 긴 숫자열의 일부이면 기각"이며, 이는 `20130628332176`
   처럼 앞 8자리가 유효 날짜인 품목보고번호를 한 번에 제거합니다.
 
-설계 근거 전문은 [`docs/PIPELINE.md`](docs/PIPELINE.md), 인용 문헌은
-[`docs/선행연구.md`](docs/선행연구.md)에 있습니다.
+각 단계의 설계 근거가 된 문헌은 7절에 정리했습니다.
 
 ## 4. 저장소 구조
 
@@ -128,7 +123,6 @@ eval/                자체 채점 하네스 (채점 대상 아님)
   run.py               실행 → 채점 → 리포트
 bench/timing.py      장당 비용 측정 (코어·스레드 고정)
 tests/               단위 테스트
-docs/                설계 문서와 선행연구
 ```
 
 ## 5. 개발용
@@ -141,8 +135,6 @@ python -m eval.run --images <dir> --gt <gt.csv>                              # �
 python -m eval.run --images <dir> --gt <gt.csv> --nanodet weights/date_detector_ema.onnx  # NanoDet 검출
 python -m eval.failure_taxonomy --images <dir> --gt-dates <csv> --gt-boxes <json>  # 단계별 오답 분류
 ```
-
-NanoDet 검출기 도입 전후(36.85 → 43.47)를 처음부터 재현하는 절차: [`docs/REPRODUCE.md`](docs/REPRODUCE.md).
 
 정답 CSV는 출처를 가리지 않습니다 — 스키마(`image_id,year,month,day,final_date`)만
 같으면 ExpDate 어댑터 산출물이든 손으로 라벨링한 파일이든 그대로 채점됩니다.
@@ -162,3 +154,33 @@ NanoDet 검출기 도입 전후(36.85 → 43.47)를 처음부터 재현하는 �
 python -m eval.expdate --root <ExpDate 압축 해제 경로> --inspect   # 구조 먼저 확인
 python -m eval.expdate --root <ExpDate 압축 해제 경로> --out labels/expdate
 ```
+
+## 7. 참고 문헌
+
+3절의 각 단계가 어디에 근거했는지만 간추렸습니다.
+
+**검출 · 인식**
+
+- Seker, A. C., & Ahn, S. C. (2022). A generalized framework for recognition of expiration dates on product packages using fully convolutional networks. *Expert Systems with Applications*, 203, 117310. — 가장 가까운 선행 연구. 날짜영역 검출 → DMY 분할 → 인식의 3단 캐스케이드. **[1]** 의 날짜 전용 검출기 구성과 ExpDate 개발셋의 출처.
+- Peng, H., Bayón, J., Recas, J., & Guijarro, M. (2025). Efficient Expiration Date Recognition in Food Packages for Mobile Applications. *Algorithms*, 18(5), 286. — 경량 백본 직접 검출이 쓸 만한 정확도에 도달한다는 근거. **[1]** 의 NanoDet 선택. (단, FP16 권고는 CPU 채점 환경에 맞지 않아 따르지 않음)
+- Zheng, J., Li, J., Ding, Z., Kong, L., & Chen, Q. (2023). Recognition of expiry data on food packages based on improved DBNet. *Connection Science*, 35(1), 2202363. — DB 계열 검출기가 식품 포장 도트매트릭스에 적합하다는 도메인 근거. **[1]** 의 RapidOCR 기본 경로.
+
+**후보 축소**
+
+- Viola, P., & Jones, M. (2001). Rapid Object Detection using a Boosted Cascade of Simple Features. *CVPR 2001*. — 캐스케이드 튜닝 규칙(싼 단계는 재현율을 거의 1로 두고 정밀도는 뒤 단계가 회수). **[2]** 박스 필터의 튜닝 목표.
+
+**파싱**
+
+- Chang, A. X., & Manning, C. D. (2012). SUTime: A Library for Recognizing and Normalizing Time Expressions. *LREC 2012*. — 인식과 정규화의 분리, 불완전한 매치를 버리지 않고 부분 결과로 내보내는 설계. **[4]** 의 부분 추출이 필드별 부분점수로 직결됩니다.
+
+**선별 (이 과제의 본질)**
+
+- Huang, Z., et al. (2019). ICDAR2019 Competition on Scanned Receipt OCR and Information Extraction. *ICDAR 2019*. — 검출/인식/KIE 3분할로 "문자 인식이 아니라 필드 선별 문제"라는 과제 경계를 확립. 1위 방법이 lexicon + 정규식이었습니다.
+- Majumder, B. P., et al. (2020). Representation Learning for Information Extraction from Form-like Documents. *ACL 2020*, 6495–6504. — 후보 생성 → 후보 점수화의 2단계 프레임. **[4]→[5]** 구조와 동일.
+- Gunel, B., et al. (2021). Data-Efficient Information Extraction from Form-Like Documents. *DI@KDD 2021*. — 같은 타입의 필드가 후보를 공유하는 문제(제조일자 vs 소비기한)의 정확한 서술과, 할당 단계에 비즈니스 로직 제약을 넣는 해법. **[5]** 하드 룰 캐스케이드.
+- Palm, R. B., Winther, O., & Laws, F. (2017). CloudScan: A Configuration-Free Invoice Analysis System Using Recurrent Neural Networks. *ICDAR 2017*. — 손으로 만든 특징 위의 선형 모델이 대규모 데이터에서도 LSTM과 노이즈 수준 차이. **[5]** 랭커를 규칙으로 두는 근거.
+
+**예산 · 안전**
+
+- Zilberstein, S. (1996). Using Anytime Algorithms in Intelligent Systems. *AI Magazine*, 17(3), 73–83. — interruptible anytime algorithm. **[6]** 이 시작 즉시 유효 CSV를 쓰고 이후 개선하는 설계의 정식 명칭.
+- Huang, G., et al. (2018). Multi-Scale Dense Networks for Resource Efficient Image Classification. *ICLR 2018*. — budgeted batch classification, 즉 "고정된 총 연산량을 쉬운 입력과 어려운 입력에 불균등하게 쓴다". 장수 N이 미지인 2400초 예산 배분의 정의.
