@@ -8,10 +8,10 @@
 ## 1. 실행
 
 ```bash
-git clone https://github.com/39byte/ITDA_CatchCatch.git
-cd ITDA_CatchCatch
+git clone https://github.com/39byte/itda3-DAT-CatchCatch.git
+cd itda3-DAT-CatchCatch
 pip install -r requirements.txt
-bash download_weights.sh   # 가중치 확인 (오프라인 실행 전 무결성 검증)
+bash download_weights.sh   # ⚠ pip install 직후 · 오프라인 차단 전에 실행 (아래 2번)
 
 export ITDA_INPUT_DIR=./val_images
 export ITDA_OUTPUT_PATH=./submission.csv
@@ -27,7 +27,29 @@ jupyter nbconvert --to notebook --execute predict.ipynb \
 
 1. **RapidOCR 기본 가중치** (det/cls/rec ONNX 약 16 MB): `rapidocr-onnxruntime==1.4.4` **wheel 내부에 포함**되어 있어 `pip install` 만으로 로컬에 완비됩니다.
 2. **NanoDet 날짜 전용 검출기** (5.6 MB): 저장소 `weights/date_detector_ema.onnx` 에 직접 포함되어 있습니다.
-3. **`download_weights.sh`**: 대회 채점 규격에 맞추어 포함되어 있으며, 실행 시 로컬 가중치 무결성을 검증하고 즉시 정상 종료(exit 0)합니다.
+3. **`download_weights.sh`**: 로컬 가중치 무결성을 검증하고, 아래 cv2 배포판 정규화를 수행한 뒤 정상 종료(exit 0)합니다. **`pip install -r requirements.txt` 직후, 인터넷 차단 전에 1회 실행해 주세요.**
+
+### `download_weights.sh` 가 필요한 이유 — cv2 배포판 정규화
+
+`rapidocr-onnxruntime` 이 `opencv-python` 을 하드 의존으로 요구해서 `opencv-python` 과
+`opencv-python-headless` 가 **항상 함께** 설치됩니다. 둘은 같은
+`site-packages/cv2/cv2.abi3.so` 를 쓰고, pip 의 설치 순서는 레벨 내 역알파벳이라
+언제나 headless → opencv-python 순 — 즉 **GUI 빌드가 파일을 덮어씁니다.**
+
+GUI 빌드의 `cv2.abi3.so` 는 번들 Qt5(`libQt5Core/Gui/Test/Widgets`)에 DT_NEEDED 로
+걸려 있고, 그 Qt5 가 시스템 `libGL.so.1` 을 찾습니다. 이 라이브러리는 wheel 에
+번들되지 않으므로, GUI 라이브러리가 없는 서버 이미지에서는
+`ImportError: libGL.so.1: cannot open shared object file` 로 `import cv2` 자체가
+실패합니다. `download_weights.sh` 는 마지막에 headless 를 한 번 더 덮어써서 이
+순서를 뒤집고, 활성 배포판이 headless 인지 출력으로 확인시켜 줍니다.
+
+버전을 맞추는 것만으로는 해결되지 않습니다 — 같은 4.9.0 이어도 GUI/headless 는 다른
+바이너리입니다. 현재 활성 배포판은 아래로 확인할 수 있습니다.
+
+```bash
+python -m pytest tests/test_cv2_headless.py -q   # 또는
+python -c "import cv2; print(cv2.getBuildInformation())" | grep 'GUI:'   # GUI: NONE 이어야 정상
+```
 
 - 노트북 실행 중 **네트워크 호출이 전혀 발생하지 않습니다.**
 - 오프라인 실행 검증 완료: 네트워크를 완전히 차단한 상태에서 공식 채점 명령(`jupyter nbconvert`)으로 완주함을 확인했습니다.

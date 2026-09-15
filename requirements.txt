@@ -12,11 +12,17 @@ pyclipper==1.4.0
 shapely==2.1.2
 
 # rapidocr-onnxruntime 은 opencv-python 을 하드 의존으로 요구하므로, 무엇을 적든
-# 두 배포판이 함께 설치된다. 그런데 둘은 같은 site-packages/cv2/ 에 풀리므로
-# **나중에 설치된 쪽이 이긴다** — 서로 다른 버전을 고정하면 실제로 import 되는 cv2 가
-# pip 의 해석 순서에 따라 달라져, 검증하지 않은 버전이 채점에 쓰일 수 있다.
-# 그래서 두 배포판을 동일 버전으로 못박는다. 어느 쪽이 이기든 검증한 cv2 4.9.0 이다.
-# (headless 는 GUI 라이브러리가 없는 컨테이너에서 libGL 임포트 실패를 막는다.)
+# 두 배포판이 함께 설치된다. 그런데 둘은 같은 site-packages/cv2/cv2.abi3.so 에 풀리므로
+# **나중에 설치된 쪽이 이긴다**. 그리고 pip 의 설치 순서는 레벨 내 역알파벳이라
+# 항상 headless -> opencv-python 순 — 즉 GUI 빌드가 결정론적으로 이긴다.
+# GUI 빌드는 번들 Qt5 를 거쳐 시스템 libGL.so.1 을 요구하는데 그 라이브러리는 wheel 에
+# 들어 있지 않아, GUI 라이브러리가 없는 서버에서는 import cv2 가 곧바로 실패한다.
+#
+# ⚠ 버전을 맞추는 것만으로는 이 문제가 해결되지 않는다 (같은 4.9.0 이어도 GUI/headless 는
+#   다른 바이너리다). 순서를 뒤집는 것은 download_weights.sh §3 이 담당하고,
+#   여기 두 줄은 전이 의존이 검증되지 않은 버전으로 풀리는 것만 막는다.
+#   (핀을 빼면 opencv-python 이 4.11.0 으로 풀려 더 나빠진다 — 실측 확인)
+#   활성 배포판 확인: python -m pytest tests/test_cv2_headless.py
 opencv-python==4.9.0.80
 opencv-python-headless==4.9.0.80
 
