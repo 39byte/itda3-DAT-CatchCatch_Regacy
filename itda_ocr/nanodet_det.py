@@ -78,6 +78,9 @@ class NanoDetDetector:
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
+        # 검출·인식 세션을 교대로 부르므로 끝난 세션의 스레드가 코어를 붙잡고 돌면
+        # 다음 세션이 굶는다. 끄면 예측 불변·전체 2.0배 (docs/SPEED_ANALYSIS.md §2)
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self._sess = ort.InferenceSession(onnx_path, sess_options=so,
                                           providers=["CPUExecutionProvider"])
         self._inp = self._sess.get_inputs()[0].name

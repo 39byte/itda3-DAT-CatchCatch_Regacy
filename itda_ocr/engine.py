@@ -18,6 +18,27 @@ def pin_threads(n: int = DEFAULT_THREADS) -> None:
         os.environ.setdefault(var, str(n))
 
 
+def _disable_rapidocr_spinning() -> None:
+    """RapidOCR 세션(det/cls/rec)의 intra-op 스레드 spinning 을 끈다.
+
+    RapidOCR 은 SessionOptions 를 내부 정적 메서드에서 만들어 인자로 끌 수 없으므로
+    RapidOCR() 생성 전에 그 메서드를 감싼다. 이유는 nanodet_det.py 의 같은 설정 참조.
+    """
+    from rapidocr_onnxruntime.utils.infer_engine import OrtInferSession
+
+    orig = OrtInferSession._init_sess_opts
+    if getattr(orig, "_no_spin", False):
+        return
+
+    def init_sess_opts(config):
+        opts = orig(config)
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        return opts
+
+    init_sess_opts._no_spin = True
+    OrtInferSession._init_sess_opts = staticmethod(init_sess_opts)
+
+
 class DateCTCLabelDecode:
     """CTC 디코딩 단계에서 비라틴/비숫자 노이즈 토큰 마스킹."""
 
@@ -64,6 +85,7 @@ class Engine:
                                             nms_iou=nanodet_nms_iou,
                                             expand=nanodet_expand)
 
+        _disable_rapidocr_spinning()
         self._ocr = RapidOCR(
             intra_op_num_threads=threads,
             inter_op_num_threads=1,
