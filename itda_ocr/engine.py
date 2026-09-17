@@ -67,7 +67,8 @@ class Engine:
                  text_score: float = 0.0, nanodet_onnx: str | None = None,
                  nanodet_score_thr: float = 0.05,
                  nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND,
-                 nanodet_nms_iou: float = DEFAULT_NMS_IOU):
+                 nanodet_nms_iou: float = DEFAULT_NMS_IOU,
+                 rec_onnx: str | None = None):
         pin_threads(threads)
         import cv2
         from rapidocr_onnxruntime import RapidOCR
@@ -86,12 +87,15 @@ class Engine:
                                             expand=nanodet_expand)
 
         _disable_rapidocr_spinning()
+        # rec_onnx: 번들 PP-OCRv4 대신 쓸 인식기(PP-OCRv6 small). 문자 사전은 RapidOCR 이
+        # ONNX 메타데이터에서 읽는다. 교체 근거는 docs/RECOGNIZER_DECISION.md
         self._ocr = RapidOCR(
             intra_op_num_threads=threads,
             inter_op_num_threads=1,
             det_box_thresh=box_thresh,
             det_unclip_ratio=unclip_ratio,
             text_score=text_score,
+            **({"rec_model_path": rec_onnx} if rec_onnx else {}),
         )
         self._det = self._ocr.text_det
         self._cls = self._ocr.text_cls

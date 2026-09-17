@@ -25,9 +25,10 @@ jupyter nbconvert --to notebook --execute predict.ipynb \
 
 인터넷이 차단된 채점 환경에서도 별도 다운로드 없이 즉시 실행됩니다.
 
-1. **RapidOCR 기본 가중치** (det/cls/rec ONNX 약 16 MB): `rapidocr-onnxruntime==1.4.4` **wheel 내부에 포함**되어 있어 `pip install` 만으로 로컬에 완비됩니다.
+1. **RapidOCR 기본 가중치** (det/cls/rec ONNX 약 16 MB): `rapidocr-onnxruntime==1.4.4` **wheel 내부에 포함**되어 있어 `pip install` 만으로 로컬에 완비됩니다. 이 중 방향 분류기(cls)를 사용합니다.
 2. **NanoDet 날짜 전용 검출기** (5.6 MB): 저장소 `weights/date_detector_ema.onnx` 에 직접 포함되어 있습니다.
-3. **`download_weights.sh`**: 로컬 가중치 무결성을 검증하고, 아래 cv2 배포판 정규화를 수행한 뒤 정상 종료(exit 0)합니다. **`pip install -r requirements.txt` 직후, 인터넷 차단 전에 1회 실행해 주세요.**
+3. **PP-OCRv6 small 인식기** (21.2 MB): 저장소 `weights/ppocrv6_rec_small.onnx` 에 직접 포함되어 있습니다. 문자 사전은 ONNX 메타데이터에 내장되어 별도 파일이 필요 없습니다.
+4. **`download_weights.sh`**: 로컬 가중치 무결성(SHA256)을 검증하고, 아래 cv2 배포판 정규화를 수행한 뒤 정상 종료(exit 0)합니다. **`pip install -r requirements.txt` 직후, 인터넷 차단 전에 1회 실행해 주세요.**
 
 ### `download_weights.sh` 가 필요한 이유 — cv2 배포판 정규화
 
@@ -60,7 +61,7 @@ python -c "import cv2; print(cv2.getBuildInformation())" | grep 'GUI:'   # GUI: 
 [0] 정규화     EXIF 회전 보정 → JPEG draft() 축소 디코딩 (≥4MP 코호트 318→103 ms)
 [1] 검출       RapidOCR DB 검출기 1회 (기본)  또는  NanoDet 날짜 전용 검출기 (Track B)
 [2] 박스 필터  종횡비·높이·면적으로 후보를 좁혀 상위 몇 개만 인식으로 넘긴다   ← 핵심
-[3] 인식       크롭 배치 인식 (+ 방향 분류기로 180° 뒤집힘 처리)
+[3] 인식       PP-OCRv6 small 로 크롭 배치 인식 (+ 방향 분류기로 180° 뒤집힘 처리)
 [4] 파싱       박스 병합 → 정규식 패밀리 → 부분 결과 허용
 [5] 선별       하드 룰 캐스케이드로 소비기한 하나를 고른다                  ← 핵심
 [6] 출력       스키마 검증 후 저장 (실패해도 raise하지 않고 안전값으로 복구)

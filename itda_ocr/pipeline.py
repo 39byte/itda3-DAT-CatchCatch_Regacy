@@ -36,6 +36,7 @@ class Config:
     nanodet_score_thr: float = 0.05
     nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND
     nanodet_nms_iou: float = DEFAULT_NMS_IOU
+    rec_onnx: str | None = None
 
 
 def load_image(path, draft_to: int = 720) -> np.ndarray:
@@ -152,7 +153,8 @@ def run(input_dir, output_path, cfg: Config | None = None, engine=None,
                         nanodet_onnx=cfg.nanodet_onnx,
                         nanodet_score_thr=cfg.nanodet_score_thr,
                         nanodet_expand=cfg.nanodet_expand,
-                        nanodet_nms_iou=cfg.nanodet_nms_iou)
+                        nanodet_nms_iou=cfg.nanodet_nms_iou,
+                        rec_onnx=cfg.rec_onnx)
 
     diags, degraded, skipped = [], 0, 0
     started = time.time()

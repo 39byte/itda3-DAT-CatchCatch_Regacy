@@ -4,3 +4,5 @@
 *.png binary
 *.jpg binary
 *.ico binary
+# 가중치는 줄바꿈 변환이 한 바이트만 끼어도 손상된다
+*.onnx binary
