@@ -133,7 +133,9 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("dmy4",   re.compile(rf"(\d{{1,2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(20\d{{2}})")),
     ("ymd4_space", re.compile(r"(20\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("dmy4_space", re.compile(r"(\d{1,2})\s+(\d{1,2})\s+(20\d{2})")),
-    ("ymd4_cross", re.compile(rf"(20\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
+    # 구분자가 섞이거나 공백이 구분자 역할을 하는 표기(`2022 03. 05`)도 받는다.
+    # 숫자 경계가 없으면 박스 병합 공백 때문에 `2021.12` + `300` 이 `2021-12-30` 이 된다.
+    ("ymd4_cross", re.compile(rf"(?<!\d)(20\d{{2}})(?:\s*{_SEP}\s*|\s+)(\d{{1,2}})(?:\s*{_SEP}\s*|\s+)(\d{{1,2}})(?!\d)")),
     ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(20\d{{2}})")),
     ("ymd4_colon", re.compile(r"(?<!\d)(20\d{2})\s*[:]\s*(\d{1,2})\s*[.:\-/]\s*(\d{1,2})(?!\d)")),
     ("ymd4_colon2", re.compile(r"(?<!\d)(20\d{2})\s*[.:\-/]\s*(\d{1,2})\s*[:]\s*(\d{1,2})(?!\d)")),
@@ -145,10 +147,15 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ymd2",   re.compile(rf"(\d{{2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(\d{{1,2}})")),
     ("ymd2_space", re.compile(r"(\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("ymd2_cross", re.compile(rf"(\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
-    ("y_mon_d", re.compile(rf"(20\d{{2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{1,2}})", re.I)),
-    ("d_mon_y", re.compile(rf"(\d{{1,2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{2,4}})", re.I)),
-    ("mon_d_y", re.compile(rf"({_MON})\w*\.?\s*(\d{{1,2}})\s*[,. ]\s*(\d{{2,4}})", re.I)),
-    ("mon_y",  re.compile(rf"({_MON})\w*\.?\s*(20\d{{2}})", re.I)),
+    # 월 이름 꼬리는 [A-Za-z]* 로만 받는다. \w* 는 숫자까지 삼켜 `2021JUN12` 의 일을
+    # `2` 로 자르고, `FEB042021` 의 일을 버린 채 연·월만 남겼다.
+    ("y_mon_d", re.compile(rf"(20\d{{2}})\s*{_SEP}?\s*({_MON})[A-Za-z]*\s*{_SEP}?\s*(\d{{1,2}})", re.I)),
+    ("d_mon_y", re.compile(rf"(\d{{1,2}})\s*{_SEP}?\s*({_MON})[A-Za-z]*\s*{_SEP}?\s*(\d{{2,4}})", re.I)),
+    # 월-일-연 (`MAY/15/20`, `APR-28-2023`, `AUG 13 2021`). 일·연 사이 구분자가 있으면 연도 2·4자리
+    ("mon_d_y", re.compile(rf"({_MON})[A-Za-z]*\.?\s*[.\-/,]?\s*(\d{{1,2}})(?:\s*[.\-/,]\s*|\s+)(\d{{4}}|\d{{2}})(?!\d)", re.I)),
+    # 붙은 표기(`AUG122020`, `AUG 132021`)는 4자리 연도만 — `MAY2022` 를 5월 20일로 읽지 않게
+    ("mon_d_y", re.compile(rf"({_MON})[A-Za-z]*\.?\s*[.\-/,]?\s*(\d{{1,2}})(20\d{{2}})(?!\d)", re.I)),
+    ("mon_y",  re.compile(rf"({_MON})[A-Za-z]*\.?\s*(20\d{{2}})", re.I)),
     ("d_fuzz_y", re.compile(r"(\d{1,2})\s*[./\- ]\s*([A-Za-z]{3,4})\s*[./\- ]\s*(\d{2,4})")),
     ("fuzz_y",  re.compile(r"(?<![A-Za-z])([A-Za-z]{3,4})\.?\s*(20\d{2})")),
     ("ymmd",   re.compile(r"(20\d{2})(\d{2})[./\- ](\d{1,2})(?![\d])")),
@@ -183,10 +190,27 @@ def _interpret(name, m, raw, source):
             return []
         return [_build(year, month, day, **{**kw, "pattern": pattern or name})]
 
+    def or_mdy(found, year, month, day, pattern):
+        """일-월-연·연-월-일이 모두 무효일 때만 미국식 월-일-연(`08/18/21`)으로 읽는다.
+
+        유효한 해석이 하나라도 있으면 추가하지 않는다 — `01/12/21` 같은
+        기존 일-월-연 정답에 경쟁 후보를 만들지 않기 위해서다.
+        """
+        if any(c is not None for c in found):
+            return found
+        # 미국식은 `/` 로 찍힌다. `01.30.18` 같은 점 표기는 국내 월.일 + 시각이라 제외한다
+        # (통합셋: `/` 6장 전부 정답, `.` 2장 전부 오탐)
+        if "/" not in raw[span[0]:span[1]]:
+            return found
+        if raw[span[1]:].lstrip().startswith(":"):   # `01/30/18:04` 의 18 은 시각이다
+            return found
+        return dated(year, month, day, pattern)
+
     if name == "ymd4":
         return dated(_year4(g[0]), int(g[2]), int(g[3]))
     if name == "dmy4":
-        return dated(_year4(g[3]), int(g[2]), int(g[0]))
+        return or_mdy(dated(_year4(g[3]), int(g[2]), int(g[0])),
+                      _year4(g[3]), int(g[0]), int(g[2]), "mdy4")
     if name == "ymd4_space":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "dmy4_space":
@@ -194,7 +218,8 @@ def _interpret(name, m, raw, source):
     if name == "ymd4_cross":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "dmy4_cross":
-        return dated(_year4(g[2]), int(g[1]), int(g[0]))
+        return or_mdy(dated(_year4(g[2]), int(g[1]), int(g[0])),
+                      _year4(g[2]), int(g[0]), int(g[1]), "mdy4")
     if name in ("ymd4_colon", "ymd4_colon2", "ymd9"):
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "ymd8":
@@ -210,14 +235,16 @@ def _interpret(name, m, raw, source):
     if name == "korean":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "ymd2":
-        return dated(_year4(g[0]), int(g[2]), int(g[3]), "ymd2") + \
-               dated(_year4(g[3]), int(g[2]), int(g[0]), "dmy2")
+        return or_mdy(dated(_year4(g[0]), int(g[2]), int(g[3]), "ymd2") +
+                      dated(_year4(g[3]), int(g[2]), int(g[0]), "dmy2"),
+                      _year4(g[3]), int(g[0]), int(g[2]), "mdy2")
     if name == "ymd2_space":
         return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") + \
                dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2")
     if name == "ymd2_cross":
-        return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") + \
-               dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2")
+        return or_mdy(dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") +
+                      dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2"),
+                      _year4(g[2]), int(g[0]), int(g[1]), "mdy2")
     if name == "y_mon_d":
         return dated(_year4(g[0]), MONTHS[g[1].upper()[:3]], int(g[2]))
     if name == "d_mon_y":
