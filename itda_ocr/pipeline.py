@@ -37,6 +37,9 @@ class Config:
     nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND
     nanodet_nms_iou: float = DEFAULT_NMS_IOU
     rec_onnx: str | None = None
+    rec_fallback: bool | str = False
+    fallback_max_k: int | None = None      # 폴백이 읽을 크롭 수 상한 (None = max_k 와 같음)
+    fallback_budget: float | None = None   # 폴백 배치 경계에서 검사하는 시간 상한(초). None = 무제한
 
 
 def load_image(path, draft_to: int = 720) -> np.ndarray:
@@ -84,8 +87,59 @@ def process_image(engine, path_or_img, cfg: Config, top_k: int | None = None,
     batch = top_k if top_k is not None else cfg.top_k
     limit = max_k if max_k is not None else cfg.max_k
 
-    texts, geoms, items, candidates = [], [], [], []
+    texts, candidates = _read(engine, img, kept, batch, limit)
+    t_rec = time.perf_counter()
+    winner = select(candidates, " ".join(t for t, _ in texts), cfg.impute_missing)
+    t_sel = time.perf_counter()
+
+    # 완전한 날짜를 못 냈으면 같은 박스를 폴백 인식기로 다시 읽고, 거기서 완전한 날짜가
+    # 나올 때만 바꾼다. 못 내면 원래 결과(연·월 부분 추출 포함)를 그대로 둔다.
+    used_fallback = False
+    if (winner is None or not winner.complete) and engine.has_fallback and kept:
+        fb_texts, fb_cands = _read(engine, img, kept, batch,
+                                   min(limit, cfg.fallback_max_k or limit),
+                                   fallback=True, budget=cfg.fallback_budget)
+        fb = select(fb_cands, " ".join(t for t, _ in fb_texts), cfg.impute_missing)
+        # 주 인식기가 연·월을 냈다면 그것과 어긋나는 폴백 날짜는 버린다. 인쇄에 연·월만 있어
+        # GT 도 연·월뿐인 이미지(통합셋 48장)에서 맞은 부분 답을 덮어쓰는 것을 막는다.
+        if fb is not None and winner is not None and winner.year and winner.month:
+            if (fb.year, fb.month) != (winner.year, winner.month):
+                fb = None
+        if fb is not None and fb.complete:
+            texts, candidates, winner, used_fallback = fb_texts, fb_cands, fb, True
+    t_end = time.perf_counter()
+
+    row = to_row(winner, image_id)
+    row["_diag"] = {
+        "n_filtered": len(kept),
+        "n_recognized": len(texts),
+        "texts": [t for t, _ in texts],
+        "candidates": [{"text": c.text, "final_date": c.final_date} for c in candidates],
+        "fallback": used_fallback,
+        "ms": {
+            "load": (t_load - t0) * 1000,
+            "detect": (t_det - t_load) * 1000,
+            "recognize": (t_rec - t_det) * 1000,
+            "parse": (t_sel - t_rec) * 1000,
+            "fallback": (t_end - t_sel) * 1000,
+            "total": (t_end - t0) * 1000,
+        },
+    }
+    return row
+
+
+def _read(engine, img, kept, batch: int, limit: int, fallback: bool = False,
+          budget: float | None = None):
+    """상위 박스부터 배치로 잘라 읽고 날짜 후보를 모은다. 확실한 후보가 나오면 멈춘다.
+
+    ``budget`` 이 있으면 배치 경계에서 경과 시간을 보고 넘으면 중단한다 — 느린 폴백
+    인식기가 어려운 이미지 하나에 시간을 다 쓰는 것을 막는다.
+    """
+    texts, geoms, candidates = [], [], []
+    t_start = time.perf_counter()
     for start in range(0, min(len(kept), limit), batch):
+        if budget is not None and start and time.perf_counter() - t_start > budget:
+            break
         crops, batch_geoms = [], []
         for _, _, box in kept[start:start + batch]:
             patch = engine.crop(img, box)
@@ -96,32 +150,13 @@ def process_image(engine, path_or_img, cfg: Config, top_k: int | None = None,
                                     float(xs.max()), float(ys.max())))
         if not crops:
             continue
-        texts.extend(engine.recognize(crops))
+        texts.extend(engine.recognize(crops, fallback=fallback))
         geoms.extend(batch_geoms)
         items = [(t, g[0], g[1], g[2], g[3]) for (t, _), g in zip(texts, geoms)]
         candidates = parse_boxes(items)
         if any(sel_score(c, "") >= STOP_SCORE for c in candidates):
             break
-    t_rec = time.perf_counter()
-    full_text = " ".join(t for t, _ in texts)
-    winner = select(candidates, full_text, cfg.impute_missing)
-    t_end = time.perf_counter()
-
-    row = to_row(winner, image_id)
-    row["_diag"] = {
-        "n_filtered": len(kept),
-        "n_recognized": len(texts),
-        "texts": [t for t, _ in texts],
-        "candidates": [{"text": c.text, "final_date": c.final_date} for c in candidates],
-        "ms": {
-            "load": (t_load - t0) * 1000,
-            "detect": (t_det - t_load) * 1000,
-            "recognize": (t_rec - t_det) * 1000,
-            "parse": (t_end - t_rec) * 1000,
-            "total": (t_end - t0) * 1000,
-        },
-    }
-    return row
+    return texts, candidates
 
 
 def write_rows(path, rows) -> None:
@@ -154,7 +189,7 @@ def run(input_dir, output_path, cfg: Config | None = None, engine=None,
                         nanodet_score_thr=cfg.nanodet_score_thr,
                         nanodet_expand=cfg.nanodet_expand,
                         nanodet_nms_iou=cfg.nanodet_nms_iou,
-                        rec_onnx=cfg.rec_onnx)
+                        rec_onnx=cfg.rec_onnx, rec_fallback=cfg.rec_fallback)
 
     diags, degraded, skipped = [], 0, 0
     started = time.time()

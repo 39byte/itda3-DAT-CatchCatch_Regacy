@@ -37,3 +37,68 @@ def test_engine_loads_v6_charset_and_reads_a_date():
     img = np.full((48, 260, 3), 255, np.uint8)
     cv2.putText(img, "2024.05.17", (6, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2)
     assert engine.recognize([img])[0][0] == "2024.05.17"
+
+
+def test_notebook_enables_v4_fallback():
+    nb = json.loads((ROOT / "predict.ipynb").read_text(encoding="utf-8"))
+    code = "".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    assert "rec_fallback=True" in code and "rec_fallback=CFG.rec_fallback" in code
+
+
+def test_fallback_recognizer_is_bundled_v4():
+    engine = Engine(nanodet_onnx=str(ROOT / "weights" / "date_detector_ema.onnx"),
+                    rec_onnx=str(REC), rec_fallback=True)
+    assert engine.has_fallback
+    assert len(engine._rec_fallback.postprocess_op.character) != 18710   # v6 사전이 아니다
+
+    img = np.full((48, 260, 3), 255, np.uint8)
+    cv2.putText(img, "2024.05.17", (6, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2)
+    assert engine.recognize([img], fallback=True)[0][0] == "2024.05.17"
+
+
+class _FakeEngine:
+    """주 인식기와 폴백 인식기가 정해진 글자를 돌려주는 가짜 엔진."""
+
+    has_fallback = True
+
+    def __init__(self, primary, fallback):
+        self.reads = {False: primary, True: fallback}
+        self.calls = []
+
+    def detect_and_filter(self, img):
+        return [(1.0, 0, np.array([[0, 0], [50, 0], [50, 10], [0, 10]], np.float32))]
+
+    def crop(self, img, box):
+        return np.ones((10, 50, 3), np.uint8)
+
+    def recognize(self, crops, fallback=False):
+        self.calls.append(fallback)
+        return [(self.reads[fallback], 0.9)] * len(crops)
+
+
+def _run(primary, fallback):
+    from itda_ocr.pipeline import Config, process_image
+    engine = _FakeEngine(primary, fallback)
+    row = process_image(engine, np.zeros((20, 60, 3), np.uint8), Config())
+    return row, engine.calls
+
+
+def test_fallback_fills_only_when_primary_has_no_full_date():
+    row, calls = _run("2024.05.17", "2023.01.01")
+    assert row["final_date"] == "2024-05-17" and calls == [False]            # 폴백 안 부름
+
+    row, calls = _run("es.01.250s", "2025.10.29")
+    assert row["final_date"] == "2025-10-29" and row["_diag"]["fallback"]    # 빈자리를 채움
+
+    row, _ = _run("2021.11", "no date")
+    assert (row["year"], row["month"], row["final_date"]) == ("2021", "11", "NONE")  # 부분 추출 보존
+
+
+def test_fallback_does_not_overwrite_matching_partial_date():
+    """주 인식기가 연·월을 냈으면 어긋나는 폴백 날짜는 버린다 (test_00108, test_00593 퇴행)."""
+    row, calls = _run("2021.12", "2021-12-25")       # 연·월 일치 → 채택
+    assert row["final_date"] == "2021-12-25" and calls == [False, True]
+
+    row, calls = _run("2021.12", "2023-01-05")       # 연·월 불일치 → 부분 답 유지
+    assert (row["year"], row["month"], row["final_date"]) == ("2021", "12", "NONE")
+    assert calls == [False, True] and not row["_diag"]["fallback"]

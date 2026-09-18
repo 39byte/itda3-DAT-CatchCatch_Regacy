@@ -17,12 +17,14 @@ def sessions(engine):
     for name, obj in (("det", engine._det), ("cls", engine._cls), ("rec", engine._rec)):
         ort_session = getattr(obj, "session", None) or obj.infer   # rec 는 session, det/cls 는 infer
         yield name, ort_session.session
+    if engine.has_fallback:
+        yield "rec_fallback", engine._rec_fallback.session.session
 
 
 def test_all_sessions_disable_spinning():
     rec = NANODET.with_name("ppocrv6_rec_small.onnx")
     engine = Engine(nanodet_onnx=str(NANODET), threads=4,
-                    rec_onnx=str(rec) if rec.exists() else None)
+                    rec_onnx=str(rec) if rec.exists() else None, rec_fallback=True)
     for name, sess in sessions(engine):
         try:
             value = sess.get_session_options().get_session_config_entry(

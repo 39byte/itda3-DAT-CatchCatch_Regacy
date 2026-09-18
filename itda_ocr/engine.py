@@ -68,7 +68,7 @@ class Engine:
                  nanodet_score_thr: float = 0.05,
                  nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND,
                  nanodet_nms_iou: float = DEFAULT_NMS_IOU,
-                 rec_onnx: str | None = None):
+                 rec_onnx: str | None = None, rec_fallback: bool | str = False):
         pin_threads(threads)
         import cv2
         from rapidocr_onnxruntime import RapidOCR
@@ -101,7 +101,22 @@ class Engine:
         self._cls = self._ocr.text_cls
         self._rec = self._ocr.text_rec
         self._rec.postprocess_op = DateCTCLabelDecode(self._rec.postprocess_op)
+        # rec_fallback: 교체 인식기가 날짜를 못 낸 이미지만 번들 PP-OCRv4 로 다시 읽는다.
+        # 두 모델은 틀리는 이미지가 달라(교체 A/B 개선 60 / 퇴행 34) 빈자리만 메워도 이득이다.
+        # 같은 설정 경로(스레드·spinning)를 타도록 기본 RapidOCR 에서 인식기만 꺼낸다.
+        # rec_fallback 이 경로면 그 모델을, True 면 번들 PP-OCRv4 를 폴백으로 쓴다.
+        self._rec_fallback = None
+        if rec_fallback and rec_onnx:
+            self._rec_fallback = RapidOCR(
+                intra_op_num_threads=threads, inter_op_num_threads=1,
+                **({"rec_model_path": rec_fallback} if isinstance(rec_fallback, str) else {}),
+            ).text_rec
+            self._rec_fallback.postprocess_op = DateCTCLabelDecode(self._rec_fallback.postprocess_op)
         self._pre = DetPreProcess(det_side, "max", self._det.mean, self._det.std)
+
+    @property
+    def has_fallback(self) -> bool:
+        return self._rec_fallback is not None
 
     # ── 검출 ───────────────────────────────────────────────────────────────
     def detect(self, img: np.ndarray) -> np.ndarray:
@@ -123,22 +138,24 @@ class Engine:
         return filter_boxes(boxes, img.shape, rerank=self._nanodet is None)
 
     # ── 인식 ───────────────────────────────────────────────────────────────
-    def recognize(self, crops: list[np.ndarray], use_cls: bool = True):
+    def recognize(self, crops: list[np.ndarray], use_cls: bool = True, fallback: bool = False):
         """크롭들을 **한 번에 배치로** 인식한다. 반환 ``[(text, score), ...]``.
 
         기본 패키징의 95% 이상이 정방향(0°)이므로, 1차는 cls 없이 바로 인식하고
         숫자가 전혀 검출되지 않을 때에만 조건부(Lazy)로 방향 분류기(_cls)를 호출한다.
+        ``fallback=True`` 면 폴백 인식기(PP-OCRv4)로 읽는다.
         """
         if not crops:
             return []
-        rec_res = self._rec(crops)[0]
+        rec = self._rec_fallback if fallback else self._rec
+        rec_res = rec(crops)[0]
         texts = [str(t) for t, _ in rec_res]
         # 크롭들 중 최소 하나라도 숫자 3개 이상(연/월/일 파편)이 잡히면 정상 방향으로 판단
         if any(sum(c.isdigit() for c in t) >= 3 for t in texts) or not use_cls:
             return [(str(t), float(s)) for t, s in rec_res]
         # 180도 역방향 크롭 구제: 숫자가 전혀 안 잡힐 때에만 _cls 실행 후 재인식
         oriented_crops = self._cls(crops)[0]
-        rec_res2 = self._rec(oriented_crops)[0]
+        rec_res2 = rec(oriented_crops)[0]
         return [(str(t), float(s)) for t, s in rec_res2]
 
     # ── 크롭 ───────────────────────────────────────────────────────────────
