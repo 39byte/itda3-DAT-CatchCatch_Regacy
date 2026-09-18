@@ -24,6 +24,35 @@ _MON = "|".join(sorted(MONTHS, key=len, reverse=True))
 YEAR_MIN, YEAR_MAX = 2018, 2032
 
 
+# 인식기가 월 이름에서 헷갈리는 글자 쌍. `OCT`→`0CT`, `NOV`→`NOU`, `SEP`→`8EP`, `JUN`→`J0N`·`JUH`.
+_MONTH_CONFUSABLE = {frozenset(p) for p in ("0O", "0U", "0D", "OU", "8S", "8B", "5S", "UV", "HN")}
+
+
+def repair_months(text: str) -> str:
+    """월 이름의 한 글자 혼동을 되돌린다. 길이를 보존한다.
+
+    3글자 창(앞뒤가 영문자가 아니고 영문자 2개 이상)이 월 이름과 정확히 한 글자,
+    그것도 혼동 쌍으로만 다르고 그런 월이 하나뿐일 때만 고친다. `fuzzy_month` 의
+    해밍 거리는 `J0N`→`JON` 을 JAN·JUN 동점에서 JAN 으로 골라 쓰지 않는다.
+    """
+    chars, up, i = list(text), text.upper(), 0
+    while i + 3 <= len(text):
+        tok = up[i:i + 3]
+        bounded = (i == 0 or not text[i - 1].isalpha()) and \
+                  (i + 3 == len(text) or not text[i + 3].isalpha())
+        if bounded and tok not in MONTHS and sum(c.isalpha() for c in tok) >= 2:
+            hits = [name for name in MONTHS if len(name) == 3
+                    and sum(a != b for a, b in zip(tok, name)) == 1
+                    and all(a == b or frozenset((a, b)) in _MONTH_CONFUSABLE
+                            for a, b in zip(tok, name))]
+            if len(hits) == 1:
+                chars[i:i + 3] = hits[0]
+                i += 3
+                continue
+        i += 1
+    return "".join(chars)
+
+
 def normalize(text: str) -> str:
     """OCR 혼동 문자를 1:1로 정규화한다."""
     chars = list(text)
@@ -290,7 +319,7 @@ def parse(raw: str, source: int = 0) -> list[Candidate]:
     """한 줄의 텍스트에서 정규식 패턴을 적용해 날짜 후보를 추출한다."""
     if not raw:
         return []
-    norm = normalize(raw)
+    norm = normalize(repair_months(raw))
     out, claimed = [], []
 
     for name, pattern in _PATTERNS:

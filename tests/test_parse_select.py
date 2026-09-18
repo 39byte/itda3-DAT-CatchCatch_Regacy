@@ -6,7 +6,7 @@
 
 import pytest
 
-from itda_ocr.parse import parse, parse_boxes
+from itda_ocr.parse import parse, parse_boxes, repair_months
 from itda_ocr.select import select, to_row
 
 
@@ -355,3 +355,30 @@ def test_broadened_patterns_do_not_invent_dates(texts, forbidden):
     """영문 월·미국식·혼합 구분자 지원 후 통합셋에서 생긴 퇴행 사례."""
     boxes = [(t, i * 60, 0, i * 60 + 50, 20) for i, t in enumerate(texts)]
     assert forbidden not in {c.final_date for c in parse_boxes(boxes)}
+
+
+# ── 월 이름 혼동 글자 (통합셋 1,473장: 인식기가 O→0, S→8, V→U, N→H 로 읽어 파서가 버린 문자열) ──
+
+@pytest.mark.parametrize("text, expected", [
+    ("04/0ct/2021",  "2021-10-04"),   # 003783, 003784
+    ("J0N 29 22",    "2022-06-29"),   # 003793 — 해밍 거리로는 JAN 과 동점
+    ("09 0CT 21",    "2021-10-09"),   # 004131, test_00588
+    ("29N0V2021",    "2021-11-29"),   # 003534 붙은 표기
+    ("29 0CT 2021",  "2021-10-29"),   # 004138
+    ("NOU 05 2022",  "2022-11-05"),   # test_00549
+    ("29/8EP/2022",  "2022-09-29"),   # test_00664 — 전엔 `29/8` 을 월·일로 읽었다
+    ("JUH 28 2021",  "2021-06-28"),   # test_00541 오라클 판독
+])
+def test_confused_month_names(text, expected):
+    assert best(text, impute=False) == expected
+
+
+@pytest.mark.parametrize("text", ["L0T 2021", "B0X 12", "M0N 12", "NOT 12", "0CTOBER", "Best Before"])
+def test_repair_months_leaves_non_months(text):
+    """혼동 쌍 한 글자로 월이 하나로 정해질 때만 고친다. 길이는 항상 보존한다."""
+    assert repair_months(text) == text
+
+
+@pytest.mark.parametrize("text", ["04/0ct/2021", "29N0V2021", "x J0N y", "0CT"])
+def test_repair_months_preserves_length(text):
+    assert len(repair_months(text)) == len(text)
