@@ -36,6 +36,7 @@ class Config:
     nanodet_score_thr: float = 0.05
     nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND
     nanodet_nms_iou: float = DEFAULT_NMS_IOU
+    crop_tta: float = 0.0                  # >0 이면 각 박스를 (원래 여백, +이 비율) 두 번 읽는다
     rec_onnx: str | None = None
     rec_fallback: bool | str = False
     fallback_max_k: int | None = None      # 폴백이 읽을 크롭 수 상한 (None = max_k 와 같음)
@@ -87,7 +88,7 @@ def process_image(engine, path_or_img, cfg: Config, top_k: int | None = None,
     batch = top_k if top_k is not None else cfg.top_k
     limit = max_k if max_k is not None else cfg.max_k
 
-    texts, candidates = _read(engine, img, kept, batch, limit)
+    texts, candidates = _read(engine, img, kept, batch, limit, tta=cfg.crop_tta)
     t_rec = time.perf_counter()
     winner = select(candidates, " ".join(t for t, _ in texts), cfg.impute_missing)
     t_sel = time.perf_counter()
@@ -98,7 +99,8 @@ def process_image(engine, path_or_img, cfg: Config, top_k: int | None = None,
     if (winner is None or not winner.complete) and engine.has_fallback and kept:
         fb_texts, fb_cands = _read(engine, img, kept, batch,
                                    min(limit, cfg.fallback_max_k or limit),
-                                   fallback=True, budget=cfg.fallback_budget)
+                                   fallback=True, budget=cfg.fallback_budget,
+                                   tta=cfg.crop_tta)
         fb = select(fb_cands, " ".join(t for t, _ in fb_texts), cfg.impute_missing)
         # 주 인식기가 연·월을 냈다면 그것과 어긋나는 폴백 날짜는 버린다. 인쇄에 연·월만 있어
         # GT 도 연·월뿐인 이미지(통합셋 48장)에서 맞은 부분 답을 덮어쓰는 것을 막는다.
@@ -129,25 +131,34 @@ def process_image(engine, path_or_img, cfg: Config, top_k: int | None = None,
 
 
 def _read(engine, img, kept, batch: int, limit: int, fallback: bool = False,
-          budget: float | None = None):
+          budget: float | None = None, tta: float = 0.0):
     """상위 박스부터 배치로 잘라 읽고 날짜 후보를 모은다. 확실한 후보가 나오면 멈춘다.
 
     ``budget`` 이 있으면 배치 경계에서 경과 시간을 보고 넘으면 중단한다 — 느린 폴백
     인식기가 어려운 이미지 하나에 시간을 다 쓰는 것을 막는다.
+
+    ``tta`` > 0 이면 박스마다 크롭을 **두 개** (원래 여백, 추가 ``tta`` 비율) 만들어 같은 배치로
+    읽고 **같은 기하 좌표**를 붙인다. 판독이 여백에 민감해서(PP-OCRv6 자체 지표 crop margin
+    robustness 75.32%) 여백 하나로는 끝 글자 절단을 못 막는다 — 값을 고르는 대신 둘 다 읽고
+    기존 선별기가 고르게 한다. 같은 좌표를 주면 ``_filter_overlapping_boxes`` 가 줄 병합에서
+    긴 판독을 남기고, ``rank()`` 동점 규칙(늦은 날짜 우선)이 잘린 판독을 떨어뜨린다.
+    근거와 1,473장 A/B 수치는 README §3 의 "[3] 인식 — 크롭 TTA".
     """
     texts, geoms, candidates = [], [], []
+    expands = (0.0, tta) if tta else (0.0,)
     t_start = time.perf_counter()
     for start in range(0, min(len(kept), limit), batch):
         if budget is not None and start and time.perf_counter() - t_start > budget:
             break
         crops, batch_geoms = [], []
         for _, _, box in kept[start:start + batch]:
-            patch = engine.crop(img, box)
-            if patch.size:
-                crops.append(patch)
-                xs, ys = box[:, 0], box[:, 1]
-                batch_geoms.append((float(xs.min()), float(ys.min()),
-                                    float(xs.max()), float(ys.max())))
+            xs, ys = box[:, 0], box[:, 1]
+            geom = (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
+            for expand in expands:
+                patch = engine.crop(img, box, expand)
+                if patch.size:
+                    crops.append(patch)
+                    batch_geoms.append(geom)
         if not crops:
             continue
         texts.extend(engine.recognize(crops, fallback=fallback))

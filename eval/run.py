@@ -138,6 +138,8 @@ def main(argv=None) -> None:
     ap.add_argument("--nanodet-expand", type=_parse_expand, default=Config.nanodet_expand,
                     help="NanoDet 박스를 인식 전에 넓히는 비율 (0.15,0.08 또는 단일 float)")
     ap.add_argument("--rec-onnx", help="인식기 ONNX 경로 (예: weights/ppocrv6_rec_small.onnx, 미지정 시 번들 PP-OCRv4)")
+    ap.add_argument("--crop-tta", type=float, default=Config.crop_tta,
+                    help="박스마다 (원래 여백, +이 비율) 두 크롭을 읽는다. 0 이면 끔")
     ap.add_argument("--nanodet-nms-iou", type=float, default=Config.nanodet_nms_iou,
                     help="NanoDet NMS IoU 임계값 (기본 0.60)")
     args = ap.parse_args(argv)
@@ -147,7 +149,7 @@ def main(argv=None) -> None:
                  nanodet_onnx=args.nanodet, nanodet_score_thr=args.nanodet_score_thr,
                  nanodet_expand=args.nanodet_expand,
                  nanodet_nms_iou=args.nanodet_nms_iou,
-                 rec_onnx=args.rec_onnx)
+                 rec_onnx=args.rec_onnx, crop_tta=args.crop_tta)
 
     if args.mode == "boxes":
         if not (args.images and args.gt):

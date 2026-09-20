@@ -162,10 +162,19 @@ class Engine:
     #: 인식기의 입력 높이. 크롭을 이보다 크게 키우는 건 순수한 낭비다 —
     REC_HEIGHT = 48
 
-    def crop(self, img: np.ndarray, box: np.ndarray) -> np.ndarray:
-        """박스를 잘라내고 필요 시 최소 높이로 리사이즈한다."""
+    def crop(self, img: np.ndarray, box: np.ndarray, expand: float = 0.0) -> np.ndarray:
+        """박스를 잘라내고 필요 시 최소 높이로 리사이즈한다.
+
+        ``expand`` 는 박스 변 길이 대비 **추가** 여백 비율이다(검출기의 등방 확장 위에 더해진다).
+        같은 박스를 여러 여백으로 읽는 크롭 TTA 용 (``Config.crop_tta``).
+        """
         h, w = img.shape[:2]
         xs, ys = box[:, 0], box[:, 1]
+        if expand:
+            dx = (xs.max() - xs.min()) * expand
+            dy = (ys.max() - ys.min()) * expand
+            xs = np.array([xs.min() - dx, xs.max() + dx])
+            ys = np.array([ys.min() - dy, ys.max() + dy])
         x0, x1 = max(int(xs.min()), 0), min(int(np.ceil(xs.max())), w)
         y0, y1 = max(int(ys.min()), 0), min(int(np.ceil(ys.max())), h)
         if x1 - x0 < 2 or y1 - y0 < 2:

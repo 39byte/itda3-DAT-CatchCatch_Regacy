@@ -39,10 +39,16 @@ def test_engine_loads_v6_charset_and_reads_a_date():
     assert engine.recognize([img])[0][0] == "2024.05.17"
 
 
-def test_notebook_enables_v4_fallback():
+def test_notebook_uses_crop_tta_instead_of_v4_fallback():
+    """크롭 TTA 를 켜고 v4 폴백은 끈다.
+
+    TTA 위에서 폴백의 기여는 +0.051 로 줄고(단독 +0.133) 꼬리 지연만 커진다 —
+    1,473장 실측은 README §3 의 "[3] 인식 — 크롭 TTA" 참조.
+    """
     nb = json.loads((ROOT / "predict.ipynb").read_text(encoding="utf-8"))
     code = "".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
-    assert "rec_fallback=True" in code and "rec_fallback=CFG.rec_fallback" in code
+    assert "crop_tta=0.20" in code
+    assert "rec_fallback=False" in code and "rec_fallback=CFG.rec_fallback" in code
 
 
 def test_fallback_recognizer_is_bundled_v4():
@@ -68,7 +74,7 @@ class _FakeEngine:
     def detect_and_filter(self, img):
         return [(1.0, 0, np.array([[0, 0], [50, 0], [50, 10], [0, 10]], np.float32))]
 
-    def crop(self, img, box):
+    def crop(self, img, box, expand=0.0):
         return np.ones((10, 50, 3), np.uint8)
 
     def recognize(self, crops, fallback=False):
@@ -102,3 +108,52 @@ def test_fallback_does_not_overwrite_matching_partial_date():
     row, calls = _run("2021.12", "2023-01-05")       # 연·월 불일치 → 부분 답 유지
     assert (row["year"], row["month"], row["final_date"]) == ("2021", "12", "NONE")
     assert calls == [False, True] and not row["_diag"]["fallback"]
+
+
+class _TTAFakeEngine:
+    """여백에 따라 다른 글자를 돌려주는 가짜 엔진 — 좁은 크롭은 끝 글자가 잘린다."""
+
+    has_fallback = False
+
+    def __init__(self, narrow, wide):
+        self.by_marker = {0: narrow, 1: wide}
+        self.expands = []
+
+    def detect_and_filter(self, img):
+        return [(1.0, 0, np.array([[0, 0], [50, 0], [50, 10], [0, 10]], np.float32))]
+
+    def crop(self, img, box, expand=0.0):
+        self.expands.append(expand)
+        return np.full((10, 50, 3), 1 if expand else 0, np.uint8)
+
+    def recognize(self, crops, fallback=False):
+        return [(self.by_marker[int(c[0, 0, 0])], 0.9) for c in crops]
+
+
+def test_crop_tta_reads_each_box_twice_and_prefers_the_untruncated_reading():
+    """절단 판독(`2025.12.2`)이 온전한 판독(`2025.12.24`)에 밀려야 한다."""
+    from itda_ocr.pipeline import Config, process_image
+
+    engine = _TTAFakeEngine("2025.12.2", "2025.12.24")
+    row = process_image(engine, np.zeros((20, 60, 3), np.uint8), Config(crop_tta=0.20))
+    assert engine.expands == [0.0, 0.20]                  # 박스당 크롭 2개
+    assert row["final_date"] == "2025-12-24"
+
+    engine = _TTAFakeEngine("2025.12.2", "2025.12.24")    # 끄면 잘린 판독만 본다
+    row = process_image(engine, np.zeros((20, 60, 3), np.uint8), Config())
+    assert engine.expands == [0.0]
+    assert row["final_date"] == "2025-12-02"
+
+
+def test_crop_expand_widens_the_patch_and_is_a_noop_at_zero():
+    """`Engine.crop(expand=)` 은 여백만 늘리고, 0 이면 기존 동작과 같아야 한다."""
+    engine = Engine.__new__(Engine)                       # 모델 로드 없이 crop 만 쓴다
+    engine._cv2 = cv2
+    img = np.zeros((300, 400, 3), np.uint8)
+    box = np.array([[100, 80], [200, 80], [200, 140], [100, 140]], np.float32)
+
+    base = engine.crop(img, box)                          # 높이 60 ≥ REC_HEIGHT → 리사이즈 없음
+    assert base.shape[:2] == (60, 100)
+    wide = engine.crop(img, box, 0.20)                    # 좌우 ±20px, 상하 ±12px
+    assert wide.shape[:2] == (84, 140)
+    assert np.array_equal(engine.crop(img, box, 0.0), base)
