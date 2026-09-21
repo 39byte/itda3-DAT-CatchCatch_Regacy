@@ -123,6 +123,10 @@ class Engine:
         """텍스트 박스 검출."""
         if self._nanodet is not None:
             return self._nanodet.detect(img)
+        return self.detect_db(img)
+
+    def detect_db(self, img: np.ndarray) -> np.ndarray:
+        """RapidOCR 범용 DB 텍스트 검출. NanoDet 이 하나도 못 냈을 때의 폴백 경로."""
         tensor = self._pre(img)
         if tensor is None:
             return np.empty((0, 4, 2), dtype=np.float32)
@@ -132,10 +136,18 @@ class Engine:
             return np.empty((0, 4, 2), dtype=np.float32)
         return self._det.filter_tag_det_res(boxes, img.shape[:2])
 
-    def detect_and_filter(self, img: np.ndarray):
-        """검출 및 박스 필터링/정렬."""
+    def detect_and_filter(self, img: np.ndarray, db_fallback: bool = False):
+        """검출 및 박스 필터링/정렬.
+
+        ``db_fallback`` 이면 NanoDet 이 박스를 **하나도** 내지 못한 이미지에서만 범용 DB 검출로
+        다시 찾는다. 통합셋에서 검출 0개인 8장은 GT 박스로 자르면 오라클이 정답을 깔끔히 읽으므로
+        순수한 검출 재현율 문제다. 발동률이 0.5% 라 평균 지연 영향은 무시할 수 있다.
+        """
         boxes = self.detect(img)
-        return filter_boxes(boxes, img.shape, rerank=self._nanodet is None)
+        kept = filter_boxes(boxes, img.shape, rerank=self._nanodet is None)
+        if not kept and db_fallback and self._nanodet is not None:
+            kept = filter_boxes(self.detect_db(img), img.shape, rerank=True)
+        return kept
 
     # ── 인식 ───────────────────────────────────────────────────────────────
     def recognize(self, crops: list[np.ndarray], use_cls: bool = True, fallback: bool = False):
@@ -187,13 +199,29 @@ class Engine:
             patch = self._cv2.resize(
                 patch, (max(int(patch.shape[1] * scale), 1), max(int(ph * scale), 1)),
                 interpolation=self._cv2.INTER_LINEAR)
-        MAX_REC_WIDTH = 320
+        MAX_REC_WIDTH = 320                                     # noqa: N806
         if patch.shape[1] > MAX_REC_WIDTH:
             scale_w = MAX_REC_WIDTH / patch.shape[1]
             patch = self._cv2.resize(
                 patch, (MAX_REC_WIDTH, max(int(patch.shape[0] * scale_w), 16)),
                 interpolation=self._cv2.INTER_AREA)
         return np.ascontiguousarray(patch)
+
+    def enhance(self, patch: np.ndarray, mode: str) -> np.ndarray:
+        """2차 판독용 크롭 전처리.
+
+        ``invert`` 명암 반전 — 어두운 바탕에 흰 글자로 인쇄된 크롭(`es.01.250s`)용.
+        ``contrast`` 회색조 최소·최대 스트레치 — 저대비 각인·엠보싱용. 폭이 거의 없으면 원본을 둔다.
+        고전 이진화(Sauvola 류)는 쓰지 않는다 — 저대비·명암반전에 강건하지 않다(SauvolaNet, ICDAR 2021).
+        """
+        if mode == "invert":
+            return np.ascontiguousarray(255 - patch)
+        g = self._cv2.cvtColor(patch, self._cv2.COLOR_BGR2GRAY)
+        lo, hi = int(g.min()), int(g.max())
+        if hi - lo < 8:
+            return patch
+        g = ((g.astype(np.float32) - lo) * (255.0 / (hi - lo))).clip(0, 255).astype(np.uint8)
+        return np.ascontiguousarray(self._cv2.cvtColor(g, self._cv2.COLOR_GRAY2BGR))
 
 
 def box_metrics(box: np.ndarray) -> tuple[float, float, float]:

@@ -71,7 +71,7 @@ class _FakeEngine:
         self.reads = {False: primary, True: fallback}
         self.calls = []
 
-    def detect_and_filter(self, img):
+    def detect_and_filter(self, img, db_fallback=False):
         return [(1.0, 0, np.array([[0, 0], [50, 0], [50, 10], [0, 10]], np.float32))]
 
     def crop(self, img, box, expand=0.0):
@@ -119,7 +119,7 @@ class _TTAFakeEngine:
         self.by_marker = {0: narrow, 1: wide}
         self.expands = []
 
-    def detect_and_filter(self, img):
+    def detect_and_filter(self, img, db_fallback=False):
         return [(1.0, 0, np.array([[0, 0], [50, 0], [50, 10], [0, 10]], np.float32))]
 
     def crop(self, img, box, expand=0.0):
@@ -157,3 +157,33 @@ def test_crop_expand_widens_the_patch_and_is_a_noop_at_zero():
     wide = engine.crop(img, box, 0.20)                    # 좌우 ±20px, 상하 ±12px
     assert wide.shape[:2] == (84, 140)
     assert np.array_equal(engine.crop(img, box, 0.0), base)
+
+
+def test_second_read_trigger_fires_only_on_suspect_readings():
+    """2차 판독 트리거: 완전한 날짜 없음 · 끝이 한 자리로 끊김 · 같은 연월에 일이 갈림."""
+    from itda_ocr.parse import parse
+    from itda_ocr.pipeline import _suspect
+
+    def w(text):
+        cands = parse(text)
+        return next((c for c in cands if c.complete), None), cands
+
+    assert _suspect(None, [])                      # 완전한 날짜 자체가 없다
+    assert _suspect(*w("2025.12.2"))               # 끝 글자 절단 서명
+    assert not _suspect(*w("2026.09.30"))          # 정상
+    assert not _suspect(*w("2026.9.30"))           # 한 자리 월은 정상 표기다
+
+
+def test_enhance_inverts_and_stretches_contrast():
+    engine = Engine.__new__(Engine)
+    engine._cv2 = cv2
+
+    flat = np.full((10, 10, 3), 100, np.uint8)
+    assert (engine.enhance(flat, "invert") == 155).all()
+    assert np.array_equal(engine.enhance(flat, "contrast"), flat)   # 폭이 0 이면 원본 유지
+
+    low = np.zeros((4, 4, 3), np.uint8)
+    low[:] = np.array([100, 100, 100], np.uint8)
+    low[0, 0] = 140
+    out = engine.enhance(low, "contrast")
+    assert out.min() == 0 and out.max() == 255                      # 최소·최대로 펴진다
