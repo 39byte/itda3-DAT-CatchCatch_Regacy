@@ -31,7 +31,7 @@ PATTERN_PRIOR = {
     "ymd8": 4,
     "ymmd": 4,
     "ymmd2": -2,
-    "y_mmdd": 4, "d_mmy": 4,
+    "y_mmdd": 4, "d_mmy": 4, "dm_y": 4,
     "y2_mmdd": 3,
     "dmy8": 1,
     "ymd6": 1, "dmy6": -2,

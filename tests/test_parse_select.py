@@ -382,3 +382,12 @@ def test_repair_months_leaves_non_months(text):
 @pytest.mark.parametrize("text", ["04/0ct/2021", "29N0V2021", "x J0N y", "0CT"])
 def test_repair_months_preserves_length(text):
     assert len(repair_months(text)) == len(text)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("EXP:14-11.,2022", "2022-11-14"),   # test_00329 — normalize 가 `,`→`.` 로 바꿔 구분자가 둘
+    ("2022.,11.14", "2022-11-14"),       # 같은 결함의 연-월-일 방향
+    ("A 1910 2020", "2020-10-19"),       # test_00228 — 일월을 붙이고 공백 뒤 연도
+])
+def test_double_separator_and_ddmm_yyyy(text, expected):
+    assert best(text, impute=False) == expected

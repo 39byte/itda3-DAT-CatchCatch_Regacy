@@ -164,8 +164,10 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("dmy4_space", re.compile(r"(\d{1,2})\s+(\d{1,2})\s+(20\d{2})")),
     # 구분자가 섞이거나 공백이 구분자 역할을 하는 표기(`2022 03. 05`)도 받는다.
     # 숫자 경계가 없으면 박스 병합 공백 때문에 `2021.12` + `300` 이 `2021-12-30` 이 된다.
-    ("ymd4_cross", re.compile(rf"(?<!\d)(20\d{{2}})(?:\s*{_SEP}\s*|\s+)(\d{{1,2}})(?:\s*{_SEP}\s*|\s+)(\d{{1,2}})(?!\d)")),
-    ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(20\d{{2}})")),
+    # 구분자는 1~2개까지 받는다. `14-11.,2022` 는 normalize 가 `,`→`.` 로 바꿔(길이 보존)
+    # `14-11..2022` 가 되는데, 1개만 받으면 연도가 떨어져 `14-11` 만 남았다 (test_00329).
+    ("ymd4_cross", re.compile(rf"(?<!\d)(20\d{{2}})(?:\s*{_SEP}{{1,2}}\s*|\s+)(\d{{1,2}})(?:\s*{_SEP}{{1,2}}\s*|\s+)(\d{{1,2}})(?!\d)")),
+    ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}{{1,2}}\s*(\d{{1,2}})\s*{_SEP}{{1,2}}\s*(20\d{{2}})")),
     ("ymd4_colon", re.compile(r"(?<!\d)(20\d{2})\s*[:]\s*(\d{1,2})\s*[.:\-/]\s*(\d{1,2})(?!\d)")),
     ("ymd4_colon2", re.compile(r"(?<!\d)(20\d{2})\s*[.:\-/]\s*(\d{1,2})\s*[:]\s*(\d{1,2})(?!\d)")),
     ("ymd9",   re.compile(r"(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d(?!\d)")),
@@ -173,6 +175,8 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("y_mmdd", re.compile(r"(20\d{2})[.\-/ ](\d{2})(\d{2})(?!\d)")),
     ("d_mmy",  re.compile(r"(?<!\d)(\d{1,2})[.\-/ ](\d{2})(20\d{2})(?!\d)")),
     ("dmy8",   re.compile(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)")),
+    # 일월을 붙이고 공백 뒤 연도 (`1910 2020` = 2020-10-19, test_00228). y_mmdd·d_mmy 의 짝.
+    ("dm_y",   re.compile(r"(?<!\d)([0-3]\d)([01]\d)\s+(20\d{2})(?!\d)")),
     ("ymd2",   re.compile(rf"(\d{{2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(\d{{1,2}})")),
     ("ymd2_space", re.compile(r"(\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("ymd2_cross", re.compile(rf"(\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
@@ -257,7 +261,7 @@ def _interpret(name, m, raw, source):
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "d_mmy":
         return dated(_year4(g[2]), int(g[1]), int(g[0]))
-    if name == "dmy8":
+    if name in ("dmy8", "dm_y"):
         return dated(_year4(g[2]), int(g[1]), int(g[0]))
     if name == "y2_mmdd":
         return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2")
