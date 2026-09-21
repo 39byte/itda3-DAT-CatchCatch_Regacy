@@ -27,7 +27,8 @@ jupyter nbconvert --to notebook --execute predict.ipynb \
 
 1. **RapidOCR 기본 가중치** (det/cls/rec ONNX 약 16 MB): `rapidocr-onnxruntime==1.4.4` **wheel 내부에 포함**되어 있어 `pip install` 만으로 로컬에 완비됩니다. 이 중 방향 분류기(cls)를 사용합니다.
 2. **NanoDet 날짜 전용 검출기** (5.6 MB): 저장소 `weights/date_detector_ema.onnx` 에 직접 포함되어 있습니다.
-3. **PP-OCRv6 small 인식기** (21.2 MB): 저장소 `weights/ppocrv6_rec_small.onnx` 에 직접 포함되어 있습니다. 문자 사전은 ONNX 메타데이터에 내장되어 별도 파일이 필요 없습니다.
+3. **PP-OCRv6 small 인식기** (12.1 MB): 저장소 `weights/ppocrv6_rec_small_date.onnx` 에 직접 포함되어 있습니다. 문자 사전은 ONNX 메타데이터에 내장되어 별도 파일이 필요 없습니다.
+   원본 `weights/ppocrv6_rec_small.onnx`(21.2 MB)의 출력 헤드 18,710 클래스(85% 한자) 중 날짜 판독에 쓰는 77자만 남긴 판으로, `python -m tools.prune_rec_head` 가 재학습 없이 가중치를 잘라 만듭니다. 판독 결과는 원본과 같고(1,473장 예측 차이 0장) 인식 실행이 약 10% 빠릅니다.
 4. **`download_weights.sh`**: 로컬 가중치 무결성(SHA256)을 검증하고, 아래 cv2 배포판 정규화를 수행한 뒤 정상 종료(exit 0)합니다. **`pip install -r requirements.txt` 직후, 인터넷 차단 전에 1회 실행해 주세요.**
 
 ### `download_weights.sh` 가 필요한 이유 — cv2 배포판 정규화

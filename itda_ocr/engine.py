@@ -39,10 +39,18 @@ def _disable_rapidocr_spinning() -> None:
     OrtInferSession._init_sess_opts = staticmethod(init_sess_opts)
 
 
-class DateCTCLabelDecode:
-    """CTC 디코딩 단계에서 비라틴/비숫자 노이즈 토큰 마스킹."""
+#: 날짜 판독에 허용하는 문자. tools/prune_rec_head.py 가 인식기 출력 헤드를 이 집합으로 잘라낸다.
+DATE_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-/:, ()[]~年月日"
 
-    def __init__(self, original_op, allowed_chars: str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-/:, ()[]~年月日"):
+
+class DateCTCLabelDecode:
+    """CTC 디코딩 단계에서 비라틴/비숫자 노이즈 토큰 마스킹.
+
+    헤드를 잘라낸 인식기(``ppocrv6_rec_small_date.onnx``)에서는 금지 문자가 없어 할 일이 없다.
+    번들 PP-OCRv4 폴백처럼 전체 사전을 가진 모델을 위해 남겨 둔다.
+    """
+
+    def __init__(self, original_op, allowed_chars: str = DATE_CHARS):
         self.original_op = original_op
         self.character = original_op.character
         allowed_set = set(allowed_chars)

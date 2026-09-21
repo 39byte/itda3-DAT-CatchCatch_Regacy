@@ -14,8 +14,15 @@ import numpy as np
 from itda_ocr.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
-REC = ROOT / "weights" / "ppocrv6_rec_small.onnx"
-REC_SHA256 = "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"
+REC_FULL = ROOT / "weights" / "ppocrv6_rec_small.onnx"          # 원본 (가지치기 입력)
+REC = ROOT / "weights" / "ppocrv6_rec_small_date.onnx"          # 출력 헤드를 날짜 77자로 자른 판
+REC_SHA256 = "9db6522e556786524d6b1ea245ab6079141816de02c8214aa64321e76b60d69c"
+
+
+def _date_img(text, width=260):
+    img = np.full((48, width, 3), 255, np.uint8)
+    cv2.putText(img, text, (6, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2)
+    return img
 
 
 def test_weight_is_present_and_intact():
@@ -23,20 +30,39 @@ def test_weight_is_present_and_intact():
     assert hashlib.sha256(REC.read_bytes()).hexdigest() == REC_SHA256
 
 
+def test_pruned_weight_is_reproducible_from_the_original(tmp_path):
+    """tools/prune_rec_head.py 가 원본에서 저장소의 파일을 바이트 그대로 다시 만든다."""
+    from tools.prune_rec_head import prune
+
+    out = tmp_path / "rec.onnx"
+    prune(REC_FULL, out)
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == REC_SHA256
+
+
 def test_notebook_points_to_the_weight():
     nb = json.loads((ROOT / "predict.ipynb").read_text(encoding="utf-8"))
     code = "".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
-    assert '"ppocrv6_rec_small.onnx"' in code and "rec_onnx=CFG.rec_onnx" in code
+    assert '"ppocrv6_rec_small_date.onnx"' in code and "rec_onnx=CFG.rec_onnx" in code
 
 
-def test_engine_loads_v6_charset_and_reads_a_date():
+def test_engine_loads_pruned_charset_and_reads_a_date():
     engine = Engine(nanodet_onnx=str(ROOT / "weights" / "date_detector_ema.onnx"), rec_onnx=str(REC))
     sess = engine._rec.session.session
-    assert sess.get_outputs()[0].shape[-1] == len(engine._rec.postprocess_op.character) == 18710
+    assert sess.get_outputs()[0].shape[-1] == len(engine._rec.postprocess_op.character) == 77
+    assert engine._rec.postprocess_op.disallowed.size == 0      # 마스킹할 문자가 남지 않았다
+    assert engine.recognize([_date_img("2024.05.17")])[0][0] == "2024.05.17"
 
-    img = np.full((48, 260, 3), 255, np.uint8)
-    cv2.putText(img, "2024.05.17", (6, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2)
-    assert engine.recognize([img])[0][0] == "2024.05.17"
+
+def test_pruned_head_decodes_exactly_like_masked_full_head():
+    """헤드를 잘라도 판독 문자열은 원본 + −∞ 마스킹과 같아야 한다 (softmax 단조성)."""
+    nano = str(ROOT / "weights" / "date_detector_ema.onnx")
+    full = Engine(nanodet_onnx=nano, rec_onnx=str(REC_FULL))
+    pruned = Engine(nanodet_onnx=nano, rec_onnx=str(REC))
+    rng = np.random.default_rng(0)
+    crops = [_date_img(t) for t in ("2024.05.17", "EXP 31/12/25", "21.06.1", "BEST BEFORE", "(2026)")]
+    crops += [rng.integers(0, 256, (48, 200, 3), np.uint8) for _ in range(3)]   # 잡음 크롭
+    got = [t for t, _ in pruned.recognize(crops, use_cls=False)]
+    assert got == [t for t, _ in full.recognize(crops, use_cls=False)]
 
 
 def test_notebook_uses_crop_tta_instead_of_v4_fallback():

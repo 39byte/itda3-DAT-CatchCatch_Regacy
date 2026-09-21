@@ -22,7 +22,7 @@ def sessions(engine):
 
 
 def test_all_sessions_disable_spinning():
-    rec = NANODET.with_name("ppocrv6_rec_small.onnx")
+    rec = NANODET.with_name("ppocrv6_rec_small_date.onnx")
     engine = Engine(nanodet_onnx=str(NANODET), threads=4,
                     rec_onnx=str(rec) if rec.exists() else None, rec_fallback=True)
     for name, sess in sessions(engine):

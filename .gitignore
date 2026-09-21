@@ -16,6 +16,8 @@ weights/*
 !weights/date_detector_ema.onnx
 # [필수] PP-OCRv6 small 인식기 가중치 (21.2MB, 문자 사전 내장)
 !weights/ppocrv6_rec_small.onnx
+# [필수] 위 인식기의 출력 헤드를 날짜 문자 77개로 잘라낸 것 (12.1MB, tools/prune_rec_head.py 로 생성)
+!weights/ppocrv6_rec_small_date.onnx
 
 # ===== 2. 대회 제공 데이터 및 외부 데이터셋 =====
 data/

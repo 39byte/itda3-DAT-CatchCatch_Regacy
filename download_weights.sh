@@ -13,10 +13,11 @@ else
     echo "[WARNING] weights/date_detector_ema.onnx not found. Pipeline will fall back to RapidOCR default detector."
 fi
 
-# 1-2. PP-OCRv6 small 인식기 가중치 (21.2MB, 문자 사전은 ONNX 메타데이터에 내장)
-#      저장소 weights/ppocrv6_rec_small.onnx 에 직접 포함되어 있습니다. 누락·손상 시 번들 PP-OCRv4 로 동작합니다.
-REC_ONNX="weights/ppocrv6_rec_small.onnx"
-REC_SHA256="6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"
+# 1-2. PP-OCRv6 small 인식기 가중치 — 출력 헤드를 날짜 문자 77개로 잘라낸 판 (12.1MB, 문자 사전은
+#      ONNX 메타데이터에 내장). 원본 weights/ppocrv6_rec_small.onnx 에서 tools/prune_rec_head.py 로 만든다.
+#      저장소에 직접 포함되어 있습니다. 누락·손상 시 번들 PP-OCRv4 로 동작합니다.
+REC_ONNX="weights/ppocrv6_rec_small_date.onnx"
+REC_SHA256="9db6522e556786524d6b1ea245ab6079141816de02c8214aa64321e76b60d69c"
 if [ -f "$REC_ONNX" ] && echo "$REC_SHA256  $REC_ONNX" | sha256sum -c --status; then
     echo "[OK] $REC_ONNX found (SHA256 verified)."
 else
