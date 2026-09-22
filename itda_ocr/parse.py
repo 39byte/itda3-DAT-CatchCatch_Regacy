@@ -24,6 +24,35 @@ _MON = "|".join(sorted(MONTHS, key=len, reverse=True))
 YEAR_MIN, YEAR_MAX = 2018, 2032
 
 
+# 인식기가 월 이름에서 헷갈리는 글자 쌍. `OCT`→`0CT`, `NOV`→`NOU`, `SEP`→`8EP`, `JUN`→`J0N`·`JUH`.
+_MONTH_CONFUSABLE = {frozenset(p) for p in ("0O", "0U", "0D", "OU", "8S", "8B", "5S", "UV", "HN")}
+
+
+def repair_months(text: str) -> str:
+    """월 이름의 한 글자 혼동을 되돌린다. 길이를 보존한다.
+
+    3글자 창(앞뒤가 영문자가 아니고 영문자 2개 이상)이 월 이름과 정확히 한 글자,
+    그것도 혼동 쌍으로만 다르고 그런 월이 하나뿐일 때만 고친다. `fuzzy_month` 의
+    해밍 거리는 `J0N`→`JON` 을 JAN·JUN 동점에서 JAN 으로 골라 쓰지 않는다.
+    """
+    chars, up, i = list(text), text.upper(), 0
+    while i + 3 <= len(text):
+        tok = up[i:i + 3]
+        bounded = (i == 0 or not text[i - 1].isalpha()) and \
+                  (i + 3 == len(text) or not text[i + 3].isalpha())
+        if bounded and tok not in MONTHS and sum(c.isalpha() for c in tok) >= 2:
+            hits = [name for name in MONTHS if len(name) == 3
+                    and sum(a != b for a, b in zip(tok, name)) == 1
+                    and all(a == b or frozenset((a, b)) in _MONTH_CONFUSABLE
+                            for a, b in zip(tok, name))]
+            if len(hits) == 1:
+                chars[i:i + 3] = hits[0]
+                i += 3
+                continue
+        i += 1
+    return "".join(chars)
+
+
 def normalize(text: str) -> str:
     """OCR 혼동 문자를 1:1로 정규화한다."""
     chars = list(text)
@@ -133,8 +162,12 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("dmy4",   re.compile(rf"(\d{{1,2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(20\d{{2}})")),
     ("ymd4_space", re.compile(r"(20\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("dmy4_space", re.compile(r"(\d{1,2})\s+(\d{1,2})\s+(20\d{2})")),
-    ("ymd4_cross", re.compile(rf"(20\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
-    ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(20\d{{2}})")),
+    # 구분자가 섞이거나 공백이 구분자 역할을 하는 표기(`2022 03. 05`)도 받는다.
+    # 숫자 경계가 없으면 박스 병합 공백 때문에 `2021.12` + `300` 이 `2021-12-30` 이 된다.
+    # 구분자는 1~2개까지 받는다. `14-11.,2022` 는 normalize 가 `,`→`.` 로 바꿔(길이 보존)
+    # `14-11..2022` 가 되는데, 1개만 받으면 연도가 떨어져 `14-11` 만 남았다 (test_00329).
+    ("ymd4_cross", re.compile(rf"(?<!\d)(20\d{{2}})(?:\s*{_SEP}{{1,2}}\s*|\s+)(\d{{1,2}})(?:\s*{_SEP}{{1,2}}\s*|\s+)(\d{{1,2}})(?!\d)")),
+    ("dmy4_cross", re.compile(rf"(\d{{1,2}})\s*{_SEP}{{1,2}}\s*(\d{{1,2}})\s*{_SEP}{{1,2}}\s*(20\d{{2}})")),
     ("ymd4_colon", re.compile(r"(?<!\d)(20\d{2})\s*[:]\s*(\d{1,2})\s*[.:\-/]\s*(\d{1,2})(?!\d)")),
     ("ymd4_colon2", re.compile(r"(?<!\d)(20\d{2})\s*[.:\-/]\s*(\d{1,2})\s*[:]\s*(\d{1,2})(?!\d)")),
     ("ymd9",   re.compile(r"(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d(?!\d)")),
@@ -142,13 +175,20 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("y_mmdd", re.compile(r"(20\d{2})[.\-/ ](\d{2})(\d{2})(?!\d)")),
     ("d_mmy",  re.compile(r"(?<!\d)(\d{1,2})[.\-/ ](\d{2})(20\d{2})(?!\d)")),
     ("dmy8",   re.compile(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)")),
+    # 일월을 붙이고 공백 뒤 연도 (`1910 2020` = 2020-10-19, test_00228). y_mmdd·d_mmy 의 짝.
+    ("dm_y",   re.compile(r"(?<!\d)([0-3]\d)([01]\d)\s+(20\d{2})(?!\d)")),
     ("ymd2",   re.compile(rf"(\d{{2}})\s*({_SEP})\s*(\d{{1,2}})\s*\2\s*(\d{{1,2}})")),
     ("ymd2_space", re.compile(r"(\d{2})\s+(\d{1,2})\s+(\d{1,2})")),
     ("ymd2_cross", re.compile(rf"(\d{{2}})\s*{_SEP}\s*(\d{{1,2}})\s*{_SEP}\s*(\d{{1,2}})")),
-    ("y_mon_d", re.compile(rf"(20\d{{2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{1,2}})", re.I)),
-    ("d_mon_y", re.compile(rf"(\d{{1,2}})\s*{_SEP}?\s*({_MON})\w*\s*{_SEP}?\s*(\d{{2,4}})", re.I)),
-    ("mon_d_y", re.compile(rf"({_MON})\w*\.?\s*(\d{{1,2}})\s*[,. ]\s*(\d{{2,4}})", re.I)),
-    ("mon_y",  re.compile(rf"({_MON})\w*\.?\s*(20\d{{2}})", re.I)),
+    # 월 이름 꼬리는 [A-Za-z]* 로만 받는다. \w* 는 숫자까지 삼켜 `2021JUN12` 의 일을
+    # `2` 로 자르고, `FEB042021` 의 일을 버린 채 연·월만 남겼다.
+    ("y_mon_d", re.compile(rf"(20\d{{2}})\s*{_SEP}?\s*({_MON})[A-Za-z]*\s*{_SEP}?\s*(\d{{1,2}})", re.I)),
+    ("d_mon_y", re.compile(rf"(\d{{1,2}})\s*{_SEP}?\s*({_MON})[A-Za-z]*\s*{_SEP}?\s*(\d{{2,4}})", re.I)),
+    # 월-일-연 (`MAY/15/20`, `APR-28-2023`, `AUG 13 2021`). 일·연 사이 구분자가 있으면 연도 2·4자리
+    ("mon_d_y", re.compile(rf"({_MON})[A-Za-z]*\.?\s*[.\-/,]?\s*(\d{{1,2}})(?:\s*[.\-/,]\s*|\s+)(\d{{4}}|\d{{2}})(?!\d)", re.I)),
+    # 붙은 표기(`AUG122020`, `AUG 132021`)는 4자리 연도만 — `MAY2022` 를 5월 20일로 읽지 않게
+    ("mon_d_y", re.compile(rf"({_MON})[A-Za-z]*\.?\s*[.\-/,]?\s*(\d{{1,2}})(20\d{{2}})(?!\d)", re.I)),
+    ("mon_y",  re.compile(rf"({_MON})[A-Za-z]*\.?\s*(20\d{{2}})", re.I)),
     ("d_fuzz_y", re.compile(r"(\d{1,2})\s*[./\- ]\s*([A-Za-z]{3,4})\s*[./\- ]\s*(\d{2,4})")),
     ("fuzz_y",  re.compile(r"(?<![A-Za-z])([A-Za-z]{3,4})\.?\s*(20\d{2})")),
     ("ymmd",   re.compile(r"(20\d{2})(\d{2})[./\- ](\d{1,2})(?![\d])")),
@@ -183,10 +223,27 @@ def _interpret(name, m, raw, source):
             return []
         return [_build(year, month, day, **{**kw, "pattern": pattern or name})]
 
+    def or_mdy(found, year, month, day, pattern):
+        """일-월-연·연-월-일이 모두 무효일 때만 미국식 월-일-연(`08/18/21`)으로 읽는다.
+
+        유효한 해석이 하나라도 있으면 추가하지 않는다 — `01/12/21` 같은
+        기존 일-월-연 정답에 경쟁 후보를 만들지 않기 위해서다.
+        """
+        if any(c is not None for c in found):
+            return found
+        # 미국식은 `/` 로 찍힌다. `01.30.18` 같은 점 표기는 국내 월.일 + 시각이라 제외한다
+        # (통합셋: `/` 6장 전부 정답, `.` 2장 전부 오탐)
+        if "/" not in raw[span[0]:span[1]]:
+            return found
+        if raw[span[1]:].lstrip().startswith(":"):   # `01/30/18:04` 의 18 은 시각이다
+            return found
+        return dated(year, month, day, pattern)
+
     if name == "ymd4":
         return dated(_year4(g[0]), int(g[2]), int(g[3]))
     if name == "dmy4":
-        return dated(_year4(g[3]), int(g[2]), int(g[0]))
+        return or_mdy(dated(_year4(g[3]), int(g[2]), int(g[0])),
+                      _year4(g[3]), int(g[0]), int(g[2]), "mdy4")
     if name == "ymd4_space":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "dmy4_space":
@@ -194,7 +251,8 @@ def _interpret(name, m, raw, source):
     if name == "ymd4_cross":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "dmy4_cross":
-        return dated(_year4(g[2]), int(g[1]), int(g[0]))
+        return or_mdy(dated(_year4(g[2]), int(g[1]), int(g[0])),
+                      _year4(g[2]), int(g[0]), int(g[1]), "mdy4")
     if name in ("ymd4_colon", "ymd4_colon2", "ymd9"):
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "ymd8":
@@ -203,21 +261,23 @@ def _interpret(name, m, raw, source):
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "d_mmy":
         return dated(_year4(g[2]), int(g[1]), int(g[0]))
-    if name == "dmy8":
+    if name in ("dmy8", "dm_y"):
         return dated(_year4(g[2]), int(g[1]), int(g[0]))
     if name == "y2_mmdd":
         return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2")
     if name == "korean":
         return dated(_year4(g[0]), int(g[1]), int(g[2]))
     if name == "ymd2":
-        return dated(_year4(g[0]), int(g[2]), int(g[3]), "ymd2") + \
-               dated(_year4(g[3]), int(g[2]), int(g[0]), "dmy2")
+        return or_mdy(dated(_year4(g[0]), int(g[2]), int(g[3]), "ymd2") +
+                      dated(_year4(g[3]), int(g[2]), int(g[0]), "dmy2"),
+                      _year4(g[3]), int(g[0]), int(g[2]), "mdy2")
     if name == "ymd2_space":
         return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") + \
                dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2")
     if name == "ymd2_cross":
-        return dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") + \
-               dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2")
+        return or_mdy(dated(_year4(g[0]), int(g[1]), int(g[2]), "ymd2") +
+                      dated(_year4(g[2]), int(g[1]), int(g[0]), "dmy2"),
+                      _year4(g[2]), int(g[0]), int(g[1]), "mdy2")
     if name == "y_mon_d":
         return dated(_year4(g[0]), MONTHS[g[1].upper()[:3]], int(g[2]))
     if name == "d_mon_y":
@@ -263,7 +323,7 @@ def parse(raw: str, source: int = 0) -> list[Candidate]:
     """한 줄의 텍스트에서 정규식 패턴을 적용해 날짜 후보를 추출한다."""
     if not raw:
         return []
-    norm = normalize(raw)
+    norm = normalize(repair_months(raw))
     out, claimed = [], []
 
     for name, pattern in _PATTERNS:

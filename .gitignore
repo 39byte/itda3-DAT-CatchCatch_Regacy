@@ -14,6 +14,10 @@ weights/*
 !weights/.gitkeep
 # [필수] 경량 날짜 전용 검출기 가중치 (5.6MB)만 저장소에 직접 포함
 !weights/date_detector_ema.onnx
+# [필수] PP-OCRv6 small 인식기 가중치 (21.2MB, 문자 사전 내장)
+!weights/ppocrv6_rec_small.onnx
+# [필수] 위 인식기의 출력 헤드를 날짜 문자 77개로 잘라낸 것 (12.1MB, tools/prune_rec_head.py 로 생성)
+!weights/ppocrv6_rec_small_date.onnx
 
 # ===== 2. 대회 제공 데이터 및 외부 데이터셋 =====
 data/
@@ -45,6 +49,7 @@ train_*.py
 train_local.py
 requirements_train.txt
 tools/generate_custom_labels.py
+tools/make_new_gt.py
 
 # ===== 6. 기획서, 기술문서, 다이어그램, 안내 이미지 =====
 *.docx
@@ -56,6 +61,7 @@ tools/generate_custom_labels.py
 개요.png
 도메인.png
 docs/
+논문정리/
 CLAUDE.md
 RESEARCH_AND_DEVELOPMENT_LOG.md
 

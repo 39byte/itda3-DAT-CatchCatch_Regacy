@@ -18,10 +18,39 @@ def pin_threads(n: int = DEFAULT_THREADS) -> None:
         os.environ.setdefault(var, str(n))
 
 
-class DateCTCLabelDecode:
-    """CTC 디코딩 단계에서 비라틴/비숫자 노이즈 토큰 마스킹."""
+def _disable_rapidocr_spinning() -> None:
+    """RapidOCR 세션(det/cls/rec)의 intra-op 스레드 spinning 을 끈다.
 
-    def __init__(self, original_op, allowed_chars: str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-/:, ()[]~年月日"):
+    RapidOCR 은 SessionOptions 를 내부 정적 메서드에서 만들어 인자로 끌 수 없으므로
+    RapidOCR() 생성 전에 그 메서드를 감싼다. 이유는 nanodet_det.py 의 같은 설정 참조.
+    """
+    from rapidocr_onnxruntime.utils.infer_engine import OrtInferSession
+
+    orig = OrtInferSession._init_sess_opts
+    if getattr(orig, "_no_spin", False):
+        return
+
+    def init_sess_opts(config):
+        opts = orig(config)
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        return opts
+
+    init_sess_opts._no_spin = True
+    OrtInferSession._init_sess_opts = staticmethod(init_sess_opts)
+
+
+#: 날짜 판독에 허용하는 문자. tools/prune_rec_head.py 가 인식기 출력 헤드를 이 집합으로 잘라낸다.
+DATE_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-/:, ()[]~年月日"
+
+
+class DateCTCLabelDecode:
+    """CTC 디코딩 단계에서 비라틴/비숫자 노이즈 토큰 마스킹.
+
+    헤드를 잘라낸 인식기(``ppocrv6_rec_small_date.onnx``)에서는 금지 문자가 없어 할 일이 없다.
+    번들 PP-OCRv4 폴백처럼 전체 사전을 가진 모델을 위해 남겨 둔다.
+    """
+
+    def __init__(self, original_op, allowed_chars: str = DATE_CHARS):
         self.original_op = original_op
         self.character = original_op.character
         allowed_set = set(allowed_chars)
@@ -46,7 +75,8 @@ class Engine:
                  text_score: float = 0.0, nanodet_onnx: str | None = None,
                  nanodet_score_thr: float = 0.05,
                  nanodet_expand: float | tuple[float, float] = DEFAULT_EXPAND,
-                 nanodet_nms_iou: float = DEFAULT_NMS_IOU):
+                 nanodet_nms_iou: float = DEFAULT_NMS_IOU,
+                 rec_onnx: str | None = None, rec_fallback: bool | str = False):
         pin_threads(threads)
         import cv2
         from rapidocr_onnxruntime import RapidOCR
@@ -64,24 +94,47 @@ class Engine:
                                             nms_iou=nanodet_nms_iou,
                                             expand=nanodet_expand)
 
+        _disable_rapidocr_spinning()
+        # rec_onnx: 번들 PP-OCRv4 대신 쓸 인식기(PP-OCRv6 small). 문자 사전은 RapidOCR 이
+        # ONNX 메타데이터에서 읽는다. 교체 근거는 docs/RECOGNIZER_DECISION.md
         self._ocr = RapidOCR(
             intra_op_num_threads=threads,
             inter_op_num_threads=1,
             det_box_thresh=box_thresh,
             det_unclip_ratio=unclip_ratio,
             text_score=text_score,
+            **({"rec_model_path": rec_onnx} if rec_onnx else {}),
         )
         self._det = self._ocr.text_det
         self._cls = self._ocr.text_cls
         self._rec = self._ocr.text_rec
         self._rec.postprocess_op = DateCTCLabelDecode(self._rec.postprocess_op)
+        # rec_fallback: 교체 인식기가 날짜를 못 낸 이미지만 번들 PP-OCRv4 로 다시 읽는다.
+        # 두 모델은 틀리는 이미지가 달라(교체 A/B 개선 60 / 퇴행 34) 빈자리만 메워도 이득이다.
+        # 같은 설정 경로(스레드·spinning)를 타도록 기본 RapidOCR 에서 인식기만 꺼낸다.
+        # rec_fallback 이 경로면 그 모델을, True 면 번들 PP-OCRv4 를 폴백으로 쓴다.
+        self._rec_fallback = None
+        if rec_fallback and rec_onnx:
+            self._rec_fallback = RapidOCR(
+                intra_op_num_threads=threads, inter_op_num_threads=1,
+                **({"rec_model_path": rec_fallback} if isinstance(rec_fallback, str) else {}),
+            ).text_rec
+            self._rec_fallback.postprocess_op = DateCTCLabelDecode(self._rec_fallback.postprocess_op)
         self._pre = DetPreProcess(det_side, "max", self._det.mean, self._det.std)
+
+    @property
+    def has_fallback(self) -> bool:
+        return self._rec_fallback is not None
 
     # ── 검출 ───────────────────────────────────────────────────────────────
     def detect(self, img: np.ndarray) -> np.ndarray:
         """텍스트 박스 검출."""
         if self._nanodet is not None:
             return self._nanodet.detect(img)
+        return self.detect_db(img)
+
+    def detect_db(self, img: np.ndarray) -> np.ndarray:
+        """RapidOCR 범용 DB 텍스트 검출. NanoDet 이 하나도 못 냈을 때의 폴백 경로."""
         tensor = self._pre(img)
         if tensor is None:
             return np.empty((0, 4, 2), dtype=np.float32)
@@ -91,38 +144,57 @@ class Engine:
             return np.empty((0, 4, 2), dtype=np.float32)
         return self._det.filter_tag_det_res(boxes, img.shape[:2])
 
-    def detect_and_filter(self, img: np.ndarray):
-        """검출 및 박스 필터링/정렬."""
+    def detect_and_filter(self, img: np.ndarray, db_fallback: bool = False):
+        """검출 및 박스 필터링/정렬.
+
+        ``db_fallback`` 이면 NanoDet 이 박스를 **하나도** 내지 못한 이미지에서만 범용 DB 검출로
+        다시 찾는다. 통합셋에서 검출 0개인 8장은 GT 박스로 자르면 오라클이 정답을 깔끔히 읽으므로
+        순수한 검출 재현율 문제다. 발동률이 0.5% 라 평균 지연 영향은 무시할 수 있다.
+        """
         boxes = self.detect(img)
-        return filter_boxes(boxes, img.shape, rerank=self._nanodet is None)
+        kept = filter_boxes(boxes, img.shape, rerank=self._nanodet is None)
+        if not kept and db_fallback and self._nanodet is not None:
+            kept = filter_boxes(self.detect_db(img), img.shape, rerank=True)
+        return kept
 
     # ── 인식 ───────────────────────────────────────────────────────────────
-    def recognize(self, crops: list[np.ndarray], use_cls: bool = True):
+    def recognize(self, crops: list[np.ndarray], use_cls: bool = True, fallback: bool = False):
         """크롭들을 **한 번에 배치로** 인식한다. 반환 ``[(text, score), ...]``.
 
         기본 패키징의 95% 이상이 정방향(0°)이므로, 1차는 cls 없이 바로 인식하고
         숫자가 전혀 검출되지 않을 때에만 조건부(Lazy)로 방향 분류기(_cls)를 호출한다.
+        ``fallback=True`` 면 폴백 인식기(PP-OCRv4)로 읽는다.
         """
         if not crops:
             return []
-        rec_res = self._rec(crops)[0]
+        rec = self._rec_fallback if fallback else self._rec
+        rec_res = rec(crops)[0]
         texts = [str(t) for t, _ in rec_res]
         # 크롭들 중 최소 하나라도 숫자 3개 이상(연/월/일 파편)이 잡히면 정상 방향으로 판단
         if any(sum(c.isdigit() for c in t) >= 3 for t in texts) or not use_cls:
             return [(str(t), float(s)) for t, s in rec_res]
         # 180도 역방향 크롭 구제: 숫자가 전혀 안 잡힐 때에만 _cls 실행 후 재인식
         oriented_crops = self._cls(crops)[0]
-        rec_res2 = self._rec(oriented_crops)[0]
+        rec_res2 = rec(oriented_crops)[0]
         return [(str(t), float(s)) for t, s in rec_res2]
 
     # ── 크롭 ───────────────────────────────────────────────────────────────
     #: 인식기의 입력 높이. 크롭을 이보다 크게 키우는 건 순수한 낭비다 —
     REC_HEIGHT = 48
 
-    def crop(self, img: np.ndarray, box: np.ndarray) -> np.ndarray:
-        """박스를 잘라내고 필요 시 최소 높이로 리사이즈한다."""
+    def crop(self, img: np.ndarray, box: np.ndarray, expand: float = 0.0) -> np.ndarray:
+        """박스를 잘라내고 필요 시 최소 높이로 리사이즈한다.
+
+        ``expand`` 는 박스 변 길이 대비 **추가** 여백 비율이다(검출기의 등방 확장 위에 더해진다).
+        같은 박스를 여러 여백으로 읽는 크롭 TTA 용 (``Config.crop_tta``).
+        """
         h, w = img.shape[:2]
         xs, ys = box[:, 0], box[:, 1]
+        if expand:
+            dx = (xs.max() - xs.min()) * expand
+            dy = (ys.max() - ys.min()) * expand
+            xs = np.array([xs.min() - dx, xs.max() + dx])
+            ys = np.array([ys.min() - dy, ys.max() + dy])
         x0, x1 = max(int(xs.min()), 0), min(int(np.ceil(xs.max())), w)
         y0, y1 = max(int(ys.min()), 0), min(int(np.ceil(ys.max())), h)
         if x1 - x0 < 2 or y1 - y0 < 2:
@@ -135,13 +207,29 @@ class Engine:
             patch = self._cv2.resize(
                 patch, (max(int(patch.shape[1] * scale), 1), max(int(ph * scale), 1)),
                 interpolation=self._cv2.INTER_LINEAR)
-        MAX_REC_WIDTH = 320
+        MAX_REC_WIDTH = 320                                     # noqa: N806
         if patch.shape[1] > MAX_REC_WIDTH:
             scale_w = MAX_REC_WIDTH / patch.shape[1]
             patch = self._cv2.resize(
                 patch, (MAX_REC_WIDTH, max(int(patch.shape[0] * scale_w), 16)),
                 interpolation=self._cv2.INTER_AREA)
         return np.ascontiguousarray(patch)
+
+    def enhance(self, patch: np.ndarray, mode: str) -> np.ndarray:
+        """2차 판독용 크롭 전처리.
+
+        ``invert`` 명암 반전 — 어두운 바탕에 흰 글자로 인쇄된 크롭(`es.01.250s`)용.
+        ``contrast`` 회색조 최소·최대 스트레치 — 저대비 각인·엠보싱용. 폭이 거의 없으면 원본을 둔다.
+        고전 이진화(Sauvola 류)는 쓰지 않는다 — 저대비·명암반전에 강건하지 않다(SauvolaNet, ICDAR 2021).
+        """
+        if mode == "invert":
+            return np.ascontiguousarray(255 - patch)
+        g = self._cv2.cvtColor(patch, self._cv2.COLOR_BGR2GRAY)
+        lo, hi = int(g.min()), int(g.max())
+        if hi - lo < 8:
+            return patch
+        g = ((g.astype(np.float32) - lo) * (255.0 / (hi - lo))).clip(0, 255).astype(np.uint8)
+        return np.ascontiguousarray(self._cv2.cvtColor(g, self._cv2.COLOR_GRAY2BGR))
 
 
 def box_metrics(box: np.ndarray) -> tuple[float, float, float]:

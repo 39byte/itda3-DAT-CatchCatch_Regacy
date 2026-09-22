@@ -78,10 +78,14 @@ class NanoDetDetector:
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
+        # 검출·인식 세션을 교대로 부르므로 끝난 세션의 스레드가 코어를 붙잡고 돌면
+        # 다음 세션이 굶는다. 끄면 예측 불변·전체 2.0배 (docs/SPEED_ANALYSIS.md §2)
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self._sess = ort.InferenceSession(onnx_path, sess_options=so,
                                           providers=["CPUExecutionProvider"])
         self._inp = self._sess.get_inputs()[0].name
         self._priors = _center_priors(input_size)                # (4789, 4)
+        self._buf = np.empty((1, 3, input_size, input_size), np.float32)   # detect() 입력 버퍼
         self._proj = np.arange(_REG_MAX + 1, dtype=np.float32)   # [0..7]
 
     # ── Engine.detect 와 같은 시그니처 ────────────────────────────────────
@@ -89,8 +93,13 @@ class NanoDetDetector:
         h, w = img.shape[:2]
         S = self.input_size
         resized = self._cv2.resize(img, (S, S), interpolation=self._cv2.INTER_LINEAR)
-        x = (resized.astype(np.float32) - _MEAN) / _STD          # BGR, nanodet val 파이프라인과 동일
-        x = np.ascontiguousarray(x.transpose(2, 0, 1)[None])     # (1, 3, S, S)
+        # (x - mean) / std 를 채널별로 사전할당 CHW 버퍼에 바로 쓴다 (BGR, nanodet val 파이프라인과
+        # 동일). 통째로 계산하면 2.7MB 임시 배열이 넷 생겨 7.8 ms, 이렇게 하면 0.74 ms.
+        # 곱셈(×1/std)으로 바꾸면 마지막 자리가 달라진다 — 나눗셈을 그대로 둬야 비트 단위로 같다.
+        x = self._buf
+        for c in range(3):
+            np.subtract(resized[:, :, c], _MEAN[c], out=x[0, c], dtype=np.float32)
+            np.divide(x[0, c], _STD[c], out=x[0, c])
 
         out = self._sess.run(None, {self._inp: x})[0][0]          # (4789, 33)
         scores = out[:, 0]
