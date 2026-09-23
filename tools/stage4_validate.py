@@ -19,7 +19,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path.home() / "Desktop" / "ITDA_CatchCatch"
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from itda_ocr.engine import Engine                      # noqa: E402
 from itda_ocr.pipeline import Config, iter_images, process_image   # noqa: E402

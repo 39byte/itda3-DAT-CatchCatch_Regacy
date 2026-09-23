@@ -4,11 +4,11 @@ stage1_target.py 와 완전히 같은 방법론(같은 GT 정답 선택 로직) 
 """
 import json, re, sys
 from pathlib import Path
-sys.path.insert(0, str(Path.home() / "Desktop" / "ITDA_CatchCatch"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from itda_ocr.engine import Engine
 from itda_ocr.pipeline import Config, load_image
 
-ROOT = Path.home() / "Desktop" / "ITDA_CatchCatch"
+ROOT = Path(__file__).resolve().parents[1]
 ONNX, THR = sys.argv[1], float(sys.argv[2])
 D = ROOT / "data" / "Kaggle"
 E = [l.strip() for l in open(ROOT / "results/expiry_region_clean_new_ids.txt") if l.strip()]
