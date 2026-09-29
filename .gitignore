@@ -57,7 +57,9 @@ tools/make_new_gt.py
 *.pdf
 *.png
 *.svg
-[DAT_캐치캐치]_*
+# 대괄호를 이스케이프해야 파일명 그대로 매칭된다 (이스케이프하지 않으면 "D·A·T·_·캐·치 중 한 글자 + _" 로 읽혀 __init__.py 까지 무시됨)
+\[DAT_캐치캐치\]_*
+reports/
 개요.png
 도메인.png
 docs/
