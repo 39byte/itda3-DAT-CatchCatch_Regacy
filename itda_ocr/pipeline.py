@@ -210,6 +210,8 @@ def _read(engine, img, kept, batch: int, limit: int, fallback: bool = False,
 
 def write_rows(path, rows) -> None:
     """제출 스키마로 저장한다. 인덱스 컬럼은 생기지 않는다."""
+    # run() 의 try 밖에서 처음 불리므로, 출력 폴더가 없을 때 여기서 raise 하면 노트북이 죽는다.
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
