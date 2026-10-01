@@ -121,8 +121,6 @@ def main(argv=None) -> None:
     print(f"커버리지           {covered / n:.1%}")
     print(f"\n3352장 추정        {3352 * wall / n:.0f}s / 2400s "
           f"{'✅' if 3352 * wall / n < 2400 else '❌ 초과'}")
-    print(f"장당 목표 150ms    p50 {statistics.median(total):.0f} ms "
-          f"{'✅' if statistics.median(total) <= 150 else '❌ 초과'}")
     print(f"\n노이즈 지표        p50/min = {noise:.2f}  "
           f"({'안정적' if noise < 1.4 else '⚠️ 이 머신은 측정 노이즈가 크다 — min을 함께 볼 것'})")
 

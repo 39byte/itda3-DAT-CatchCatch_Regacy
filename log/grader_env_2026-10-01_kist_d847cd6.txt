@@ -1,0 +1,59 @@
+d847cd6 head=d847cd6 dirty=0
+8dbdfd1 head=8dbdfd1 dirty=0
+=== setup (network) ===
+PIP_OK
+=== [ITDA] Checking Model Weights ===
+[OK] weights/date_detector_ema.onnx found.
+[OK] weights/ppocrv6_rec_small_date.onnx found (SHA256 verified).
+[OK] RapidOCR default models are bundled within the python wheel package.
+--- Normalizing cv2 distribution to the headless build ---
+[OK] active cv2 4.9.0 is the headless build (GUI=NONE).
+=== Model weight verification complete. ===
+--- 사전 점검 ---
+[OK] 런타임 다운로드 없음
+[OK] cuda 호출 없음
+[OK] ort 1.23.2 ['AzureExecutionProvider', 'CPUExecutionProvider']
+[env] 6.18.33.2-microsoft-standard-WSL2
+[env] PRETTY_NAME="Ubuntu 22.04.5 LTS"
+[env] Python 3.10.12
+[env] model name	: 12th Gen Intel(R) Core(TM) i5-12450H
+=== offline runs (KIST 665) ===
+kist_sub_1 NET_BLOCKED Percent of CPU this job got: 268% Elapsed (wall clock) time (h:mm:ss or m:ss): 1:47.82 Maximum resident set size (kbytes): 588240 exit=0 
+kist_ref_1 NET_BLOCKED Percent of CPU this job got: 257% Elapsed (wall clock) time (h:mm:ss or m:ss): 2:24.23 Maximum resident set size (kbytes): 667480 exit=0 
+kist_sub_2 NET_BLOCKED Percent of CPU this job got: 265% Elapsed (wall clock) time (h:mm:ss or m:ss): 2:20.41 Maximum resident set size (kbytes): 554496 exit=0 
+kist_ref_2 NET_BLOCKED Percent of CPU this job got: 257% Elapsed (wall clock) time (h:mm:ss or m:ss): 2:30.76 Maximum resident set size (kbytes): 604864 exit=0 
+kist_sub_1: header=['image_id', 'year', 'month', 'day', 'final_date'] rows=665 ids==inputs:True missing=0 dup=0 fmt_err=0 score=47.970 exact=95.04% diff_vs_0922(22d0f4e)=0
+kist_sub_2: header=['image_id', 'year', 'month', 'day', 'final_date'] rows=665 ids==inputs:True missing=0 dup=0 fmt_err=0 score=47.970 exact=95.04% diff_vs_0922(22d0f4e)=0
+kist_ref_1: header=['image_id', 'year', 'month', 'day', 'final_date'] rows=665 ids==inputs:True missing=0 dup=0 fmt_err=0 score=47.835 exact=94.74% diff_vs_0922(22d0f4e)=2
+sub_1 vs sub_2 byte-identical: True
+--- kist_sub_1 notebook (error outputs: 0)
+root=/root/eval_1001c/repo_d847cd6  threads=4  budget=2100s
+engine ready in 0.48s  |  검출: NanoDet 날짜검출기  |  인식: PP-OCRv6 small (날짜 헤드) + 크롭 TTA(+20%)  (오프라인 로컬 가중치 준비 완료)
+665장  장당 예산 3157 ms
+  200/665  124 ms/img
+  400/665  144 ms/img
+  600/665  151 ms/img
+saved 665 rows to /tmp/kd/out.csv
+이미지        665장
+경과          103.6s  (모델 로드 제외)
+장당          156 ms
+커버리지      92.0%   (날짜를 낸 비율)
+단계 하향     0장
+예산 초과 생략 0장
+전체 벽시계   104.3s / 2400s
+--- kist_sub_2 notebook (error outputs: 0)
+root=/root/eval_1001c/repo_d847cd6  threads=4  budget=2100s
+engine ready in 0.45s  |  검출: NanoDet 날짜검출기  |  인식: PP-OCRv6 small (날짜 헤드) + 크롭 TTA(+20%)  (오프라인 로컬 가중치 준비 완료)
+665장  장당 예산 3157 ms
+  200/665  196 ms/img
+  400/665  208 ms/img
+  600/665  202 ms/img
+saved 665 rows to /tmp/kd/out.csv
+이미지        665장
+경과          136.1s  (모델 로드 제외)
+장당          205 ms
+커버리지      92.0%   (날짜를 낸 비율)
+단계 하향     0장
+예산 초과 생략 0장
+전체 벽시계   136.8s / 2400s
+KIST_D847_OK
